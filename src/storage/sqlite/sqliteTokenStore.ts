@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { StoredToken, TokenStore } from '../tokenStore.js';
+import { StoredToken, TokenStore, TokenUpdate } from '../tokenStore.js';
 
 type EncBlob = { ciphertext: Buffer; iv: Buffer; tag: Buffer };
 
@@ -49,8 +49,23 @@ export class SqliteTokenStore implements TokenStore {
   }
 
   upsert(token: StoredToken): void {
-    const access = encryptString(token.accessToken, this.key);
-    const refresh = encryptString(token.refreshToken, this.key);
+    this.mergeUpsert(token.accountEmail, {
+      accessToken: token.accessToken,
+      refreshToken: token.refreshToken,
+      expiryDate: token.expiryDate
+    });
+  }
+
+  mergeUpsert(accountEmail: string, patch: TokenUpdate): void {
+    if (patch.accessToken === undefined || patch.expiryDate === undefined) {
+      throw new Error('mergeUpsert requires accessToken and expiryDate');
+    }
+
+    const access = encryptString(patch.accessToken, this.key);
+    const shouldReplaceRefresh = typeof patch.refreshToken === 'string' && patch.refreshToken.length > 0;
+    const refresh = shouldReplaceRefresh ? encryptString(patch.refreshToken as string, this.key) : null;
+    const now = new Date().toISOString();
+
     this.db.prepare(`
       INSERT INTO oauth_tokens(account_email, access_cipher, access_iv, access_tag, refresh_cipher, refresh_iv, refresh_tag, expiry_date, created_at, updated_at)
       VALUES(@accountEmail, @accessCipher, @accessIv, @accessTag, @refreshCipher, @refreshIv, @refreshTag, @expiryDate, @now, @now)
@@ -58,21 +73,21 @@ export class SqliteTokenStore implements TokenStore {
         access_cipher=excluded.access_cipher,
         access_iv=excluded.access_iv,
         access_tag=excluded.access_tag,
-        refresh_cipher=excluded.refresh_cipher,
-        refresh_iv=excluded.refresh_iv,
-        refresh_tag=excluded.refresh_tag,
+        refresh_cipher=COALESCE(excluded.refresh_cipher, oauth_tokens.refresh_cipher),
+        refresh_iv=COALESCE(excluded.refresh_iv, oauth_tokens.refresh_iv),
+        refresh_tag=COALESCE(excluded.refresh_tag, oauth_tokens.refresh_tag),
         expiry_date=excluded.expiry_date,
         updated_at=excluded.updated_at
     `).run({
-      accountEmail: token.accountEmail,
+      accountEmail,
       accessCipher: access.ciphertext,
       accessIv: access.iv,
       accessTag: access.tag,
-      refreshCipher: refresh.ciphertext,
-      refreshIv: refresh.iv,
-      refreshTag: refresh.tag,
-      expiryDate: token.expiryDate,
-      now: new Date().toISOString()
+      refreshCipher: refresh?.ciphertext ?? null,
+      refreshIv: refresh?.iv ?? null,
+      refreshTag: refresh?.tag ?? null,
+      expiryDate: patch.expiryDate,
+      now
     });
   }
 
