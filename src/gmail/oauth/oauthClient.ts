@@ -56,6 +56,13 @@ export function createAuthorizedClient(config: AppConfig, tokenStore: TokenStore
   });
 
   oauth2Client.on('tokens', (tokens) => {
+    if (!tokens.access_token || !tokens.expiry_date) return;
+
+    tokenStore.mergeUpsert(accountEmail, {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiryDate: tokens.expiry_date
+    });
     const current = tokenStore.get(accountEmail);
     if (!current) return;
 
