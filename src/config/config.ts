@@ -5,6 +5,19 @@ import { z } from 'zod';
 
 dotenv.config();
 
+const envBoolean = (defaultValue: boolean) =>
+  z.union([
+    z.boolean(),
+    z
+      .string()
+      .trim()
+      .toLowerCase()
+      .refine((value) => ['true', 'false', '1', '0', 'yes', 'no'].includes(value), {
+        message: 'Expected a boolean value (true/false/1/0/yes/no)'
+      })
+      .transform((value) => ['true', '1', 'yes'].includes(value))
+  ]).default(defaultValue);
+
 const schema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1),
@@ -17,9 +30,9 @@ const schema = z.object({
   ATTACHMENT_ALLOWED_EXTENSIONS: z.string().default('pdf,doc,docx'),
   DEDUPE_LOOKBACK_DAYS: z.coerce.number().int().positive().default(14),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-  METRICS_ENABLED: z.coerce.boolean().default(true),
+  METRICS_ENABLED: envBoolean(true),
   INGEST_BODY_MAX_CHARS: z.coerce.number().int().positive().default(12000),
-  INGEST_INCLUDE_BODY: z.coerce.boolean().default(true)
+  INGEST_INCLUDE_BODY: envBoolean(true)
 });
 
 export type AppConfig = {
