@@ -107,7 +107,7 @@ export class GmailClient {
     do {
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        labelIds: [resolvedLabelId],
+        labelIds: [labelId],
         q,
         maxResults: 100,
         pageToken

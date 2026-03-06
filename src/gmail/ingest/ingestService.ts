@@ -32,7 +32,14 @@ export type RunSummary = {
   endTimestamp: string;
   accountEmail: string;
   label: string;
-  counts: { found: number; new: number; processed: number; skipped: number; attachments_downloaded: number };
+  counts: {
+    found: number;
+    new: number;
+    processed: number;
+    skipped: number;
+    attachments_found: number;
+    attachments_downloaded: number;
+  };
   processed_message_ids: string[];
   attachment_filenames: string[];
   attachment_sizes: number[];
@@ -58,7 +65,7 @@ export async function ingestOnce(opts: {
   const processed_message_ids: string[] = [];
   const attachment_filenames: string[] = [];
   const attachment_sizes: number[] = [];
-  let found = 0, newlyFound = 0, processed = 0, skipped = 0, attachmentsDownloaded = 0;
+  let found = 0, newlyFound = 0, processed = 0, skipped = 0, attachmentsFound = 0, attachmentsDownloaded = 0;
 
   try {
     const cursor = opts.cursorStore.getCursor(opts.accountEmail, label);
@@ -80,7 +87,10 @@ export async function ingestOnce(opts: {
       }
       newlyFound++;
       const atts = await opts.gmailClient.getAttachments(m.messageId, opts.config.allowedAttachmentExtensions, !opts.dryRun);
-      attachmentsDownloaded += atts.length;
+      attachmentsFound += atts.length;
+      if (!opts.dryRun) {
+        attachmentsDownloaded += atts.reduce((total, att) => total + (att.data?.length ?? 0), 0);
+      }
       atts.forEach((a) => {
         attachment_filenames.push(a.filename);
         attachment_sizes.push(a.size ?? 0);
@@ -130,7 +140,7 @@ export async function ingestOnce(opts: {
     endTimestamp: new Date().toISOString(),
     accountEmail: opts.accountEmail,
     label,
-    counts: { found, new: newlyFound, processed, skipped, attachments_downloaded: attachmentsDownloaded },
+    counts: { found, new: newlyFound, processed, skipped, attachments_found: attachmentsFound, attachments_downloaded: attachmentsDownloaded },
     processed_message_ids,
     attachment_filenames,
     attachment_sizes,

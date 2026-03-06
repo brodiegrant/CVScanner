@@ -55,6 +55,10 @@ Dry-run ingestion (metadata + body extraction, no attachment bytes download):
 npm run ingest -- --account=<email> --label="Process" --dry-run
 ```
 
+Run summary counters:
+- `counts.attachments_found`: number of attachment files matching allowed extensions discovered during ingest.
+- `counts.attachments_downloaded`: total attachment bytes downloaded (0 in `--dry-run`).
+
 
 ## Gmail label configuration
 - `--label` and `GMAIL_LABEL` accept either a Gmail label name (for example `Process`) or a Gmail label ID (for example `Label_123456789`).
