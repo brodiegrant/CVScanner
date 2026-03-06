@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { AppConfig } from '../../config/config.js';
-import { GmailClient } from '../client/gmailClient.js';
+import { AttachmentRejectReason, GmailClient } from '../client/gmailClient.js';
 import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
@@ -25,7 +25,7 @@ export type IngestForLlm = {
   bodyCharCount?: number;
   bodyTruncated?: boolean;
   contentHash?: string;
-  attachments: { filename: string; mimeType?: string; size?: number; data?: Buffer }[];
+  attachments: { filename: string; mimeType?: string; size?: number; data?: Buffer; rejected: boolean; rejectReason?: AttachmentRejectReason }[];
   sensitivity: 'contains_pii';
 };
 
@@ -46,6 +46,7 @@ export type RunSummary = {
   processed_message_ids: string[];
   attachment_filenames: string[];
   attachment_sizes: number[];
+  attachment_reject_reasons: { filename: string; reason: AttachmentRejectReason }[];
   errors: { code: string; message: string; stage: string }[];
 };
 
@@ -68,6 +69,7 @@ export async function ingestOnce(opts: {
   const processed_message_ids: string[] = [];
   const attachment_filenames: string[] = [];
   const attachment_sizes: number[] = [];
+  const attachment_reject_reasons: { filename: string; reason: AttachmentRejectReason }[] = [];
   let found = 0, newlyFound = 0, processed = 0, skipped = 0, attachmentsFound = 0, attachmentsDownloaded = 0;
 
   try {
@@ -89,7 +91,13 @@ export async function ingestOnce(opts: {
         continue;
       }
       newlyFound++;
-      const atts = await opts.gmailClient.getAttachments(m.messageId, opts.config.allowedAttachmentExtensions, !opts.dryRun);
+      const atts = await opts.gmailClient.getAttachments(m.messageId, {
+        maxBytes: opts.config.maxAttachmentBytes,
+        allowedMimeTypes: opts.config.allowedAttachmentMimeTypes,
+        allowedExtensions: opts.config.allowedAttachmentExtensions,
+        allowArchives: opts.config.allowAttachmentArchives,
+        maxArchiveExpansionRatio: opts.config.maxArchiveExpansionRatio
+      }, !opts.dryRun);
       attachmentsFound += atts.length;
       if (!opts.dryRun) {
         attachmentsDownloaded += atts.reduce((total, att) => total + (att.data?.length ?? 0), 0);
@@ -97,6 +105,7 @@ export async function ingestOnce(opts: {
       atts.forEach((a) => {
         attachment_filenames.push(a.filename);
         attachment_sizes.push(a.size ?? 0);
+        if (a.rejectReason) attachment_reject_reasons.push({ filename: a.filename, reason: a.rejectReason });
       });
 
       const payload: IngestForLlm = {
@@ -150,6 +159,7 @@ export async function ingestOnce(opts: {
     processed_message_ids,
     attachment_filenames,
     attachment_sizes,
+    attachment_reject_reasons,
     errors
   };
 }

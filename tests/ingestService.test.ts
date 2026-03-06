@@ -9,7 +9,11 @@ const config = {
   defaultLabel: 'Process',
   dedupeLookbackDays: 14,
   logLevel: 'info',
+  maxAttachmentBytes: 10 * 1024 * 1024,
+  allowedAttachmentMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
   allowedAttachmentExtensions: ['pdf', 'doc', 'docx'],
+  allowAttachmentArchives: false,
+  maxArchiveExpansionRatio: 30,
   ingestBodyMaxChars: 1000,
   ingestIncludeBody: true
 } as any;
