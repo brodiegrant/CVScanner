@@ -58,12 +58,58 @@ describe('GmailClient with mocked Gmail API', () => {
     expect(ids).toEqual(['m1']);
 
     const meta = await client.getMessageMetadata('m1', true, 1000);
-    expect(meta.bodyText).toContain('answer 1');
+    expect(meta.rawBodyCandidate).toContain('answer 1');
+    expect(meta.normalizedBodyCandidate).toContain('answer 1');
+    expect(meta.bodyExtractionSource).toBe('text/plain');
 
-    const atts = await client.getAttachments('m1', ['pdf'], true);
-    expect(atts[0].filename).toBe('cv.pdf');
-    expect(atts[0].data?.toString('utf8')).toBe('pdfbytes');
+    const atts = await client.getAttachments('m1', {
+      maxBytes: 1024,
+      allowedMimeTypes: ['application/pdf'],
+      allowedExtensions: ['pdf'],
+      allowArchives: false,
+      maxArchiveExpansionRatio: 30
+    }, true);
+    const accepted = atts.find((a) => !a.rejected);
+    expect(accepted?.filename).toBe('cv.pdf');
+    expect(accepted?.data?.toString('utf8')).toBe('pdfbytes');
   });
+
+
+  it('rejects disallowed attachments using metadata before downloading bytes', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages/m2')
+      .query((q) => q.format === 'full')
+      .once()
+      .reply(200, {
+        id: 'm2',
+        payload: {
+          parts: [
+            { filename: 'resume.zip', mimeType: 'application/zip', body: { attachmentId: 'zip1', size: 99 } },
+            { filename: 'resume.pdf', mimeType: 'application/pdf', body: { attachmentId: 'pdf1', size: 999999 } }
+          ]
+        }
+      });
+
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'token' });
+    const client = new GmailClient(auth);
+
+    const atts = await client.getAttachments('m2', {
+      maxBytes: 1024,
+      allowedMimeTypes: ['application/pdf'],
+      allowedExtensions: ['pdf'],
+      allowArchives: false,
+      maxArchiveExpansionRatio: 30
+    }, true);
+
+    expect(atts).toHaveLength(2);
+    expect(atts[0].rejected).toBe(true);
+    expect(atts[0].rejectReason).toBe('archive_not_allowed');
+    expect(atts[1].rejected).toBe(true);
+    expect(atts[1].rejectReason).toBe('size_exceeds_max_bytes');
+    expect(nock.isDone()).toBe(true);
+  });
+
 
 
   it('listMessageIds uses the resolved Gmail label id in users.messages.list', async () => {
@@ -120,5 +166,30 @@ describe('GmailClient with mocked Gmail API', () => {
     await expect(client.listMessageIds('Custom Queue', 0)).resolves.toEqual(['m1']);
 
     expect(nock.isDone()).toBe(true);
+  });
+
+  it('falls back to html body extraction and reports source', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages/m-html')
+      .query((q) => q.format === 'full')
+      .once()
+      .reply(200, {
+        id: 'm-html',
+        internalDate: '1000',
+        payload: {
+          parts: [
+            { mimeType: 'text/html', body: { data: b64('<p>Hello&nbsp;&nbsp;world</p>') } }
+          ]
+        }
+      });
+
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'token' });
+    const client = new GmailClient(auth);
+
+    const meta = await client.getMessageMetadata('m-html', true, 1000);
+    expect(meta.bodyExtractionSource).toBe('text/html-fallback');
+    expect(meta.rawBodyCandidate).toContain('Hello');
+    expect(meta.normalizedBodyCandidate).toBe('Hello&nbsp;&nbsp;world');
   });
 });

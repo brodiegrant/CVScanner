@@ -9,7 +9,11 @@ const config = {
   defaultLabel: 'Process',
   dedupeLookbackDays: 14,
   logLevel: 'info',
+  maxAttachmentBytes: 10 * 1024 * 1024,
+  allowedAttachmentMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
   allowedAttachmentExtensions: ['pdf', 'doc', 'docx'],
+  allowAttachmentArchives: false,
+  maxArchiveExpansionRatio: 30,
   ingestBodyMaxChars: 1000,
   ingestIncludeBody: true
 } as any;
@@ -26,7 +30,15 @@ class FakeGmail {
     this.lastSince = afterInternalDateMs;
     return this.ids;
   }
-  async getMessageMetadata(id: string) { return { messageId: id, internalDate: this.internalDates[id] ?? 0, bodyText: 'screen answers' }; }
+  async getMessageMetadata(id: string) {
+    return {
+      messageId: id,
+      internalDate: this.internalDates[id] ?? 0,
+      rawBodyCandidate: 'screen\nanswers',
+      normalizedBodyCandidate: 'screen answers',
+      bodyExtractionSource: 'text/plain' as const
+    };
+  }
   async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
     if (this.failOn === id) throw new Error('download failed');
     return [{ filename: `${id}.pdf`, size: 10, data: downloadBytes ? Buffer.alloc(10) : undefined }];
@@ -34,6 +46,30 @@ class FakeGmail {
 }
 
 describe('ingestOnce', () => {
+  it('passes raw and normalized body candidates through ingest payload', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing-body-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+    const payloads: any[] = [];
+
+    const result = await ingestOnce({
+      accountEmail: 'a@b.com',
+      config,
+      gmailClient: new FakeGmail(undefined, { m1: 1000 }, ['m1']) as any,
+      cursorStore: store,
+      metrics: new NoopMetrics(),
+      onMessage: async (m) => {
+        payloads.push(m);
+      }
+    });
+
+    expect(result.counts.processed).toBe(1);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].rawBodyCandidate).toBe('screen\nanswers');
+    expect(payloads[0].normalizedBodyCandidate).toBe('screen answers');
+    expect(payloads[0].bodyExtractionSource).toBe('text/plain');
+    expect(payloads[0].screeningSourceText).toBe('screen answers');
+  });
+
   it('is idempotent across multiple runs', async () => {
     const dbPath = path.join(os.tmpdir(), `cvscanner-ing-${Date.now()}.db`);
     const store = new SqliteCursorStore(dbPath);
