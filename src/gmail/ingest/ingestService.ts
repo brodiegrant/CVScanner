@@ -52,6 +52,7 @@ export async function ingestOnce(opts: {
   const start = new Date();
   const label = opts.label ?? opts.config.defaultLabel;
   const errors: RunSummary['errors'] = [];
+  const overlapMs = 1000;
   const processed_message_ids: string[] = [];
   const attachment_filenames: string[] = [];
   const attachment_sizes: number[] = [];
@@ -60,7 +61,11 @@ export async function ingestOnce(opts: {
   try {
     const cursor = opts.cursorStore.getCursor(opts.accountEmail, label);
     const since = cursor?.lastSuccessInternalDate ?? 0;
-    const ids = await opts.gmailClient.listMessageIds(label, since);
+    // Query with a bounded overlap to guard against second-level `after:`
+    // boundaries and equal internalDate timestamps; processed_messages dedupe
+    // is the correctness guard that prevents double-processing.
+    const queryAfter = Math.max(0, since - overlapMs);
+    const ids = await opts.gmailClient.listMessageIds(label, queryAfter);
     found = ids.length;
 
     const messages = await Promise.all(ids.map((id) => opts.gmailClient.getMessageMetadata(id, opts.config.ingestIncludeBody, opts.config.ingestBodyMaxChars)));
@@ -100,6 +105,9 @@ export async function ingestOnce(opts: {
 
       await opts.onMessage(payload);
       opts.cursorStore.markProcessed(opts.accountEmail, label, m.messageId, m.internalDate);
+      // Cursor only advances on successful handling. With overlap queries above,
+      // this lets failed same-timestamp neighbors be retried on the next run
+      // while dedupe prevents reprocessing of already-successful messages.
       opts.cursorStore.setCursor(opts.accountEmail, label, m.internalDate);
       processed_message_ids.push(m.messageId);
       processed++;

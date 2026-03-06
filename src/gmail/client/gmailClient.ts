@@ -94,7 +94,9 @@ export class GmailClient {
   }
 
   async listMessageIds(label: string, afterInternalDateMs: number): Promise<string[]> {
-    const resolvedLabelId = await this.resolveLabelId(label);
+    // Gmail search `after:` operates at second precision, so callers should pass
+    // a bounded overlap window (not an exact previous cursor) to avoid missing
+    // messages around second-level boundaries.
     const afterSec = Math.floor(afterInternalDateMs / 1000);
     const q = `after:${afterSec}`;
     const ids: string[] = [];
