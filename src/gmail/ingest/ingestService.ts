@@ -18,6 +18,9 @@ export type IngestForLlm = {
   to?: string;
   subject?: string;
   snippet?: string;
+  rawBodyCandidate?: string;
+  normalizedBodyCandidate?: string;
+  bodyExtractionSource?: 'text/plain' | 'text/html-fallback';
   screeningSourceText?: string;
   bodyCharCount?: number;
   bodyTruncated?: boolean;
@@ -116,11 +119,14 @@ export async function ingestOnce(opts: {
         to: m.to,
         subject: m.subject,
         snippet: m.snippet,
-        screeningSourceText: m.bodyText,
+        rawBodyCandidate: m.rawBodyCandidate,
+        normalizedBodyCandidate: m.normalizedBodyCandidate,
+        bodyExtractionSource: m.bodyExtractionSource,
+        screeningSourceText: m.normalizedBodyCandidate,
         bodyCharCount: m.bodyCharCount,
         bodyTruncated: m.bodyTruncated,
-        contentHash: m.bodyText ? crypto.createHash('sha256').update(m.bodyText).digest('hex') : undefined,
-        attachments: atts.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data, rejected: a.rejected, rejectReason: a.rejectReason })),
+        contentHash: m.normalizedBodyCandidate ? crypto.createHash('sha256').update(m.normalizedBodyCandidate).digest('hex') : undefined,
+        attachments: atts.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
         sensitivity: 'contains_pii'
       };
 

@@ -58,7 +58,9 @@ describe('GmailClient with mocked Gmail API', () => {
     expect(ids).toEqual(['m1']);
 
     const meta = await client.getMessageMetadata('m1', true, 1000);
-    expect(meta.bodyText).toContain('answer 1');
+    expect(meta.rawBodyCandidate).toContain('answer 1');
+    expect(meta.normalizedBodyCandidate).toContain('answer 1');
+    expect(meta.bodyExtractionSource).toBe('text/plain');
 
     const atts = await client.getAttachments('m1', {
       maxBytes: 1024,
@@ -164,5 +166,30 @@ describe('GmailClient with mocked Gmail API', () => {
     await expect(client.listMessageIds('Custom Queue', 0)).resolves.toEqual(['m1']);
 
     expect(nock.isDone()).toBe(true);
+  });
+
+  it('falls back to html body extraction and reports source', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages/m-html')
+      .query((q) => q.format === 'full')
+      .once()
+      .reply(200, {
+        id: 'm-html',
+        internalDate: '1000',
+        payload: {
+          parts: [
+            { mimeType: 'text/html', body: { data: b64('<p>Hello&nbsp;&nbsp;world</p>') } }
+          ]
+        }
+      });
+
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'token' });
+    const client = new GmailClient(auth);
+
+    const meta = await client.getMessageMetadata('m-html', true, 1000);
+    expect(meta.bodyExtractionSource).toBe('text/html-fallback');
+    expect(meta.rawBodyCandidate).toContain('Hello');
+    expect(meta.normalizedBodyCandidate).toBe('Hello&nbsp;&nbsp;world');
   });
 });
