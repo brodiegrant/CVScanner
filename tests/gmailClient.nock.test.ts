@@ -8,7 +8,11 @@ const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64').replace(/\+
 afterEach(() => nock.cleanAll());
 
 describe('GmailClient with mocked Gmail API', () => {
-  it('lists metadata and downloads attachments', async () => {
+  it('resolves label names and downloads attachments', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels')
+      .reply(200, { labels: [{ id: 'Label_123', name: 'Process' }] });
+
     nock('https://gmail.googleapis.com')
       .get('/gmail/v1/users/me/labels')
       .query(true)

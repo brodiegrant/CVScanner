@@ -26,7 +26,7 @@ export function decryptString(blob: EncBlob, key: Buffer): string {
 }
 
 export class SqliteTokenStore implements TokenStore {
-  private readonly db: Database.Database;
+  private readonly db: any;
   private readonly key: Buffer;
 
   constructor(dbPath: string, keyB64: string) {

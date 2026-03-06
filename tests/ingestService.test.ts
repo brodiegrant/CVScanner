@@ -64,4 +64,19 @@ describe('ingestOnce', () => {
     const cursor = store.getCursor('a@b.com', 'Process');
     expect(cursor?.lastSuccessInternalDate).toBe(1000);
   });
+
+  it('re-queries with overlap to recover failed same-timestamp messages', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing3-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+
+    const failing = new FakeGmail('m2');
+    const r1 = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: failing as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(r1.counts.processed).toBe(1);
+
+    const recovered = new FakeGmail();
+    const r2 = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: recovered as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(recovered.lastSince).toBe(0);
+    expect(r2.counts.processed).toBe(1);
+    expect(r2.processed_message_ids).toEqual(['m2']);
+  });
 });

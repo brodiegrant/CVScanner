@@ -5,6 +5,8 @@ import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
 
+const CURSOR_OVERLAP_MS = 1000;
+
 export type IngestForLlm = {
   runId: string;
   accountEmail: string;
