@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { google } from 'googleapis';
 import { AppConfig } from '../../config/config.js';
 import { waitForOAuthCode } from './oauthServer.js';
-import { TokenStore } from '../../storage/tokenStore.js';
+import { TokenStore, TokenUpdate } from '../../storage/tokenStore.js';
 
 const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 

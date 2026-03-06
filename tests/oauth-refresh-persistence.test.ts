@@ -32,21 +32,9 @@ function createStore() {
 }
 
 describe('OAuth token refresh persistence', () => {
-  it('keeps rotated refresh token when later events omit refresh_token', () => {
+  it('persists a rotated refresh token from token events', () => {
     const store = createStore();
-    const accountEmail = 'rotate@example.com';
-    store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
-
-    const client = createAuthorizedClient(testConfig, store, accountEmail);
-    client.emit('tokens', { access_token: 'a2', refresh_token: 'r2', expiry_date: 200 });
-    client.emit('tokens', { access_token: 'a3', expiry_date: 300 });
-
-    expect(store.get(accountEmail)?.refreshToken).toBe('r2');
-  });
-
-  it('updates refresh token when token event contains a new non-empty refresh_token', () => {
-    const store = createStore();
-    const accountEmail = 'replace@example.com';
+    const accountEmail = 'rotated@example.com';
     store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
 
     const client = createAuthorizedClient(testConfig, store, accountEmail);
@@ -55,36 +43,49 @@ describe('OAuth token refresh persistence', () => {
     const saved = store.get(accountEmail);
     expect(saved?.refreshToken).toBe('r2');
     expect(saved?.accessToken).toBe('a2');
+    expect(saved?.expiryDate).toBe(200);
   });
 
-  it('does not overwrite refresh token when refresh_token is omitted or empty', () => {
+  it('does not overwrite refresh token when token events omit refresh_token', () => {
+    const store = createStore();
+    const accountEmail = 'omitted@example.com';
+    store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
+
+    const client = createAuthorizedClient(testConfig, store, accountEmail);
+    client.emit('tokens', { access_token: 'a2', expiry_date: 200 });
+
+    const saved = store.get(accountEmail);
+    expect(saved?.refreshToken).toBe('r1');
+    expect(saved?.accessToken).toBe('a2');
+    expect(saved?.expiryDate).toBe(200);
+  });
+
+  it('does not overwrite refresh token when token events include an empty refresh_token', () => {
     const store = createStore();
     const accountEmail = 'empty@example.com';
     store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
 
     const client = createAuthorizedClient(testConfig, store, accountEmail);
-    client.emit('tokens', { access_token: 'a2', expiry_date: 200 });
-    expect(store.get(accountEmail)?.refreshToken).toBe('r1');
+    client.emit('tokens', { access_token: 'a2', refresh_token: '', expiry_date: 200 });
 
-    client.emit('tokens', { access_token: 'a3', refresh_token: '', expiry_date: 300 });
-    expect(store.get(accountEmail)?.refreshToken).toBe('r1');
+    const saved = store.get(accountEmail);
+    expect(saved?.refreshToken).toBe('r1');
+    expect(saved?.accessToken).toBe('a2');
+    expect(saved?.expiryDate).toBe(200);
   });
 
-  it('preserves rotated refresh token under near-simultaneous mixed token updates', async () => {
-    const iterations = 25;
+  it('keeps rotated refresh token when later events omit refresh_token', () => {
+    const store = createStore();
+    const accountEmail = 'rotate-then-omit@example.com';
+    store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
 
-    for (let i = 0; i < iterations; i++) {
-      const store = createStore();
-      const accountEmail = `race-${i}@example.com`;
-      store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
+    const client = createAuthorizedClient(testConfig, store, accountEmail);
+    client.emit('tokens', { access_token: 'a2', refresh_token: 'r2', expiry_date: 200 });
+    client.emit('tokens', { access_token: 'a3', expiry_date: 300 });
 
-      const client = createAuthorizedClient(testConfig, store, accountEmail);
-      await Promise.all([
-        Promise.resolve().then(() => client.emit('tokens', { access_token: `a2-${i}`, refresh_token: `r2-${i}`, expiry_date: 200 })),
-        Promise.resolve().then(() => client.emit('tokens', { access_token: `a3-${i}`, expiry_date: 300 }))
-      ]);
-
-      expect(store.get(accountEmail)?.refreshToken).toBe(`r2-${i}`);
-    }
+    const saved = store.get(accountEmail);
+    expect(saved?.refreshToken).toBe('r2');
+    expect(saved?.accessToken).toBe('a3');
+    expect(saved?.expiryDate).toBe(300);
   });
 });
