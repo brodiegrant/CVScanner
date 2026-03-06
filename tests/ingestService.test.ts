@@ -27,9 +27,9 @@ class FakeGmail {
     return this.ids;
   }
   async getMessageMetadata(id: string) { return { messageId: id, internalDate: this.internalDates[id] ?? 0, bodyText: 'screen answers' }; }
-  async getAttachments(id: string) {
+  async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
     if (this.failOn === id) throw new Error('download failed');
-    return [{ filename: `${id}.pdf`, size: 10 }];
+    return [{ filename: `${id}.pdf`, size: 10, data: downloadBytes ? Buffer.alloc(10) : undefined }];
   }
 }
 
@@ -44,6 +44,19 @@ describe('ingestOnce', () => {
 
     const r2 = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: new FakeGmail() as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async (m) => { seen.push(m.messageId); } });
     expect(r2.counts.processed).toBe(0);
+  });
+
+  it('tracks attachment counts separately for found vs downloaded bytes', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing4-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+
+    const dryRun = await ingestOnce({ accountEmail: 'a@b.com', dryRun: true, config, gmailClient: new FakeGmail() as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(dryRun.counts.attachments_found).toBe(2);
+    expect(dryRun.counts.attachments_downloaded).toBe(0);
+
+    const normalRun = await ingestOnce({ accountEmail: 'other@b.com', dryRun: false, config, gmailClient: new FakeGmail() as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(normalRun.counts.attachments_found).toBe(2);
+    expect(normalRun.counts.attachments_downloaded).toBe(20);
   });
 
 
