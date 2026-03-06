@@ -4,6 +4,7 @@ import { GmailClient } from '../client/gmailClient.js';
 import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
+import { Provenance, buildIngestProvenance } from '../../pipeline/provenance.js';
 
 const CURSOR_OVERLAP_MS = 1000;
 
@@ -22,7 +23,8 @@ export type IngestForLlm = {
   bodyCharCount?: number;
   bodyTruncated?: boolean;
   contentHash?: string;
-  attachments: { filename: string; mimeType?: string; size?: number; data?: Buffer }[];
+  attachments: { attachmentId?: string; filename: string; mimeType?: string; size?: number; data?: Buffer }[];
+  provenance: Provenance;
   sensitivity: 'contains_pii';
 };
 
@@ -111,7 +113,17 @@ export async function ingestOnce(opts: {
         bodyCharCount: m.bodyCharCount,
         bodyTruncated: m.bodyTruncated,
         contentHash: m.bodyText ? crypto.createHash('sha256').update(m.bodyText).digest('hex') : undefined,
-        attachments: atts.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
+        attachments: atts.map((a) => ({ attachmentId: a.attachmentId, filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
+        provenance: buildIngestProvenance({
+          runId,
+          accountEmail: opts.accountEmail,
+          label,
+          messageId: m.messageId,
+          threadId: m.threadId,
+          internalDate: m.internalDate,
+          screeningSourceText: m.bodyText,
+          attachments: atts
+        }),
         sensitivity: 'contains_pii'
       };
 
