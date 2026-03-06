@@ -74,6 +74,20 @@ describe('OAuth token refresh persistence', () => {
     expect(saved?.expiryDate).toBe(200);
   });
 
+  it('updates only refresh token when token events include refresh_token only', () => {
+    const store = createStore();
+    const accountEmail = 'refresh-only@example.com';
+    store.upsert({ accountEmail, accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
+
+    const client = createAuthorizedClient(testConfig, store, accountEmail);
+    client.emit('tokens', { refresh_token: 'r2' });
+
+    const saved = store.get(accountEmail);
+    expect(saved?.refreshToken).toBe('r2');
+    expect(saved?.accessToken).toBe('a1');
+    expect(saved?.expiryDate).toBe(100);
+  });
+
   it('keeps rotated refresh token when later events omit refresh_token', () => {
     const store = createStore();
     const accountEmail = 'rotate-then-omit@example.com';
