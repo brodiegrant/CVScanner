@@ -10,8 +10,18 @@ afterEach(() => nock.cleanAll());
 describe('GmailClient with mocked Gmail API', () => {
   it('lists metadata and downloads attachments', async () => {
     nock('https://gmail.googleapis.com')
-      .get('/gmail/v1/users/me/messages')
+      .get('/gmail/v1/users/me/labels')
       .query(true)
+      .reply(200, { labels: [{ id: 'Label_123', name: 'Process' }] });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels/Label_123')
+      .query(true)
+      .reply(200, { id: 'Label_123', name: 'Process' });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages')
+      .query((q) => q.labelIds === 'Label_123' && q.maxResults === '100')
       .reply(200, { messages: [{ id: 'm1' }] });
 
     nock('https://gmail.googleapis.com')
@@ -49,5 +59,34 @@ describe('GmailClient with mocked Gmail API', () => {
     const atts = await client.getAttachments('m1', ['pdf'], true);
     expect(atts[0].filename).toBe('cv.pdf');
     expect(atts[0].data?.toString('utf8')).toBe('pdfbytes');
+  });
+
+  it('resolves configured label name to id once and reuses cached id', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels')
+      .query(true)
+      .once()
+      .reply(200, { labels: [{ id: 'Label_999', name: 'Custom Queue' }] });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels/Label_999')
+      .query(true)
+      .once()
+      .reply(200, { id: 'Label_999', name: 'Custom Queue' });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages')
+      .query((q) => q.labelIds === 'Label_999' && q.q === 'after:0')
+      .twice()
+      .reply(200, { messages: [{ id: 'm1' }] });
+
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'token' });
+    const client = new GmailClient(auth);
+
+    await expect(client.listMessageIds('Custom Queue', 0)).resolves.toEqual(['m1']);
+    await expect(client.listMessageIds('Custom Queue', 0)).resolves.toEqual(['m1']);
+
+    expect(nock.isDone()).toBe(true);
   });
 });
