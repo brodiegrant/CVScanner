@@ -5,9 +5,33 @@ export function waitForOAuthCode(host: string, port: number, timeoutMs = 180000)
   return new Promise((resolve, reject) => {
     const app = express();
     let server: Server;
+    let settled = false;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+    };
+
+    const settleResolve = (code: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(code);
+    };
+
+    const settleReject = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
     const timer = setTimeout(() => {
       server?.close();
-      reject(new Error('OAuth callback timed out'));
+      settleReject(new Error('OAuth callback timed out'));
     }, timeoutMs);
 
     app.get('/oauth/callback', (req, res) => {
@@ -16,12 +40,19 @@ export function waitForOAuthCode(host: string, port: number, timeoutMs = 180000)
         res.status(400).send('Missing code');
         return;
       }
-      clearTimeout(timer);
       res.send('Authorization successful. You can close this tab.');
       server.close();
-      resolve(code);
+      settleResolve(code);
     });
 
     server = app.listen(port, host);
+    server.on('error', (error) => {
+      const serverError = error as NodeJS.ErrnoException;
+      settleReject(
+        new Error(
+          `Failed to start OAuth callback server on ${host}:${port} (${serverError.code ?? 'UNKNOWN'}): ${serverError.message}`,
+        ),
+      );
+    });
   });
 }
