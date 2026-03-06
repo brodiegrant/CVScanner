@@ -42,10 +42,44 @@ export const ProvenanceSchema = z.object({
   extraction: ExtractionProvenanceSchema.optional()
 });
 
+export const TransformationTypeSchema = z.enum(['copied', 'normalized', 'derived', 'inferred']);
+
+export const ProvenanceSourceSpanSchema = z.object({
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative()
+});
+
+export const CleaningTransformationStepSchema = z.object({
+  stepId: z.string(),
+  stepName: z.string(),
+  reason: z.string(),
+  inputSha256: z.string(),
+  outputSha256: z.string(),
+  deterministic: z.boolean(),
+  removedChars: z.number().int().nonnegative(),
+  changed: z.boolean()
+});
+
+export const CleaningValueProvenanceSchema = z.object({
+  fieldPath: z.string(),
+  cleanedValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  transformationType: TransformationTypeSchema,
+  sourceArtifactId: z.string(),
+  sourceSpans: z.array(ProvenanceSourceSpanSchema),
+  evidenceText: z.string(),
+  deterministic: z.boolean(),
+  inferred: z.boolean(),
+  rationale: z.string().optional()
+});
+
 export type ArtifactOrigin = z.infer<typeof ArtifactOriginSchema>;
 export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
 export type ExtractionProvenance = z.infer<typeof ExtractionProvenanceSchema>;
 export type Provenance = z.infer<typeof ProvenanceSchema>;
+export type TransformationType = z.infer<typeof TransformationTypeSchema>;
+export type ProvenanceSourceSpan = z.infer<typeof ProvenanceSourceSpanSchema>;
+export type CleaningTransformationStep = z.infer<typeof CleaningTransformationStepSchema>;
+export type CleaningValueProvenance = z.infer<typeof CleaningValueProvenanceSchema>;
 
 export function computeSha256(content: Buffer | string): string {
   return crypto.createHash(HASH_ALGORITHM).update(content).digest('hex');

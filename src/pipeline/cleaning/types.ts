@@ -1,5 +1,5 @@
 import type { PipelineError } from '../errors.js';
-import type { Provenance } from '../provenance.js';
+import type { CleaningTransformationStep, CleaningValueProvenance, Provenance } from '../provenance.js';
 
 export type CleaningSignals = {
   confidence: number;
@@ -33,6 +33,8 @@ export type CleaningOutputDto = {
   body_text: string;
   signals: CleaningSignals;
   pii: CleaningPii;
+  transformation_audit: CleaningTransformationStep[];
+  value_provenance: CleaningValueProvenance[];
   provenance: Provenance;
   errors: PipelineError[];
 };
