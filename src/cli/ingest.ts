@@ -6,6 +6,8 @@ import { SqliteCursorStore } from '../storage/sqlite/sqliteCursorStore.js';
 import { createAuthorizedClient } from '../gmail/oauth/oauthClient.js';
 import { GmailClient } from '../gmail/client/gmailClient.js';
 import { ingestOnce } from '../gmail/ingest/ingestService.js';
+import { pathToFileURL } from 'node:url';
+import type { RunSummary } from '../gmail/ingest/ingestService.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -38,9 +40,24 @@ async function main() {
   });
 
   process.stdout.write(`${JSON.stringify(summary)}\n`);
+
+  const summaryErrorMessage = getSummaryErrorMessage(summary);
+  if (summaryErrorMessage) {
+    throw new Error(summaryErrorMessage);
+  }
 }
 
-main().catch((err) => {
-  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
-});
+export function getSummaryErrorMessage(summary: Pick<RunSummary, 'errors'>): string | undefined {
+  if (summary.errors.length === 0) return undefined;
+
+  const firstError = summary.errors[0];
+  return `ingest completed with ${summary.errors.length} error(s): ${firstError.code}/${firstError.stage} ${firstError.message}`;
+}
+
+const entryUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+if (entryUrl === import.meta.url) {
+  main().catch((err) => {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+}
