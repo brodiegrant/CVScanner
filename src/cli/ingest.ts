@@ -8,6 +8,7 @@ import { GmailClient } from '../gmail/client/gmailClient.js';
 import { ingestOnce } from '../gmail/ingest/ingestService.js';
 import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
+import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -34,8 +35,22 @@ async function main() {
     gmailClient,
     cursorStore,
     metrics,
-    onMessage: async (_msg) => {
-      // Stub handoff to parsing/LLM layer.
+    onMessage: async (msg) => {
+      const cleaned = runCleaningPipeline({
+        raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
+        body_text: msg.screeningSourceText,
+        provenance: {
+          source: 'gmail_ingest',
+          run_id: msg.runId,
+          account_email: msg.accountEmail,
+          message_id: msg.messageId,
+          thread_id: msg.threadId,
+          internal_date: msg.internalDate,
+          label: msg.label
+        }
+      });
+
+      process.stdout.write(`${JSON.stringify(cleaned)}\n`);
     }
   });
 
