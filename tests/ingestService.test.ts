@@ -15,9 +15,13 @@ const config = {
 } as any;
 
 class FakeGmail {
-  constructor(private failOn?: string) {}
-  async listMessageIds() { return ['m1', 'm2']; }
-  async getMessageMetadata(id: string) { return { messageId: id, internalDate: id === 'm1' ? 1000 : 2000, bodyText: 'screen answers' }; }
+  constructor(
+    private failOn?: string,
+    private internalDates: Record<string, number> = { m1: 1000, m2: 2000 },
+    private ids: string[] = ['m1', 'm2']
+  ) {}
+  async listMessageIds() { return this.ids; }
+  async getMessageMetadata(id: string) { return { messageId: id, internalDate: this.internalDates[id] ?? 0, bodyText: 'screen answers' }; }
   async getAttachments(id: string) {
     if (this.failOn === id) throw new Error('download failed');
     return [{ filename: `${id}.pdf`, size: 10 }];
@@ -35,6 +39,20 @@ describe('ingestOnce', () => {
 
     const r2 = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: new FakeGmail() as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async (m) => { seen.push(m.messageId); } });
     expect(r2.counts.processed).toBe(0);
+  });
+
+
+  it('recovers failed message with identical internalDate on next run', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing3-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+
+    const first = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: new FakeGmail('m2', { m1: 1000, m2: 1000 }) as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(first.counts.processed).toBe(1);
+    expect(first.errors.length).toBe(1);
+
+    const second = await ingestOnce({ accountEmail: 'a@b.com', config, gmailClient: new FakeGmail(undefined, { m1: 1000, m2: 1000 }) as any, cursorStore: store, metrics: new NoopMetrics(), onMessage: async () => {} });
+    expect(second.counts.processed).toBe(1);
+    expect(second.processed_message_ids).toEqual(['m2']);
   });
 
   it('does not advance cursor past failed message', async () => {
