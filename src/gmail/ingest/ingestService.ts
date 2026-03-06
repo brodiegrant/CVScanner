@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import { AppConfig } from '../../config/config.js';
-import { GmailClient } from '../client/gmailClient.js';
+import { AttachmentRejectReason, GmailClient } from '../client/gmailClient.js';
 import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
-import { Provenance, buildIngestProvenance } from '../../pipeline/provenance.js';
+import { PipelineError } from '../../pipeline/errors.js';
 
 const CURSOR_OVERLAP_MS = 1000;
 
@@ -19,12 +19,14 @@ export type IngestForLlm = {
   to?: string;
   subject?: string;
   snippet?: string;
+  rawBodyCandidate?: string;
+  normalizedBodyCandidate?: string;
+  bodyExtractionSource?: 'text/plain' | 'text/html-fallback';
   screeningSourceText?: string;
   bodyCharCount?: number;
   bodyTruncated?: boolean;
   contentHash?: string;
-  attachments: { attachmentId?: string; filename: string; mimeType?: string; size?: number; data?: Buffer }[];
-  provenance: Provenance;
+  attachments: { filename: string; mimeType?: string; size?: number; data?: Buffer; rejected: boolean; rejectReason?: AttachmentRejectReason }[];
   sensitivity: 'contains_pii';
 };
 
@@ -45,6 +47,7 @@ export type RunSummary = {
   processed_message_ids: string[];
   attachment_filenames: string[];
   attachment_sizes: number[];
+  attachment_reject_reasons: { filename: string; reason: AttachmentRejectReason }[];
   errors: { code: string; message: string; stage: string }[];
 };
 
@@ -67,6 +70,7 @@ export async function ingestOnce(opts: {
   const processed_message_ids: string[] = [];
   const attachment_filenames: string[] = [];
   const attachment_sizes: number[] = [];
+  const attachment_reject_reasons: { filename: string; reason: AttachmentRejectReason }[] = [];
   let found = 0, newlyFound = 0, processed = 0, skipped = 0, attachmentsFound = 0, attachmentsDownloaded = 0;
 
   try {
@@ -88,7 +92,13 @@ export async function ingestOnce(opts: {
         continue;
       }
       newlyFound++;
-      const atts = await opts.gmailClient.getAttachments(m.messageId, opts.config.allowedAttachmentExtensions, !opts.dryRun);
+      const atts = await opts.gmailClient.getAttachments(m.messageId, {
+        maxBytes: opts.config.maxAttachmentBytes,
+        allowedMimeTypes: opts.config.allowedAttachmentMimeTypes,
+        allowedExtensions: opts.config.allowedAttachmentExtensions,
+        allowArchives: opts.config.allowAttachmentArchives,
+        maxArchiveExpansionRatio: opts.config.maxArchiveExpansionRatio
+      }, !opts.dryRun);
       attachmentsFound += atts.length;
       if (!opts.dryRun) {
         attachmentsDownloaded += atts.reduce((total, att) => total + (att.data?.length ?? 0), 0);
@@ -96,6 +106,7 @@ export async function ingestOnce(opts: {
       atts.forEach((a) => {
         attachment_filenames.push(a.filename);
         attachment_sizes.push(a.size ?? 0);
+        if (a.rejectReason) attachment_reject_reasons.push({ filename: a.filename, reason: a.rejectReason });
       });
 
       const payload: IngestForLlm = {
@@ -109,21 +120,14 @@ export async function ingestOnce(opts: {
         to: m.to,
         subject: m.subject,
         snippet: m.snippet,
-        screeningSourceText: m.bodyText,
+        rawBodyCandidate: m.rawBodyCandidate,
+        normalizedBodyCandidate: m.normalizedBodyCandidate,
+        bodyExtractionSource: m.bodyExtractionSource,
+        screeningSourceText: m.normalizedBodyCandidate,
         bodyCharCount: m.bodyCharCount,
         bodyTruncated: m.bodyTruncated,
-        contentHash: m.bodyText ? crypto.createHash('sha256').update(m.bodyText).digest('hex') : undefined,
-        attachments: atts.map((a) => ({ attachmentId: a.attachmentId, filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
-        provenance: buildIngestProvenance({
-          runId,
-          accountEmail: opts.accountEmail,
-          label,
-          messageId: m.messageId,
-          threadId: m.threadId,
-          internalDate: m.internalDate,
-          screeningSourceText: m.bodyText,
-          attachments: atts
-        }),
+        contentHash: m.normalizedBodyCandidate ? crypto.createHash('sha256').update(m.normalizedBodyCandidate).digest('hex') : undefined,
+        attachments: atts.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
         sensitivity: 'contains_pii'
       };
 
@@ -140,10 +144,18 @@ export async function ingestOnce(opts: {
     opts.cursorStore.pruneProcessed(opts.accountEmail, label, opts.config.dedupeLookbackDays);
     opts.metrics.increment('ingest_run_completed', 1, { runId, accountEmail: opts.accountEmail, label, processed });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown fatal error';
-    errors.push({ code: 'FATAL_INGEST', message, stage: 'ingest' });
+    const cause = err instanceof Error ? err : undefined;
+    const message = cause?.message ?? 'Unknown fatal error';
+    errors.push({
+      kind: 'ExtractionFailedError',
+      stage: 'ingest',
+      message,
+      messageId: '__run__',
+      reason: message,
+      cause
+    });
     logger.error('Ingest fatal error', { runId, accountEmail: opts.accountEmail, label, error: message });
-    opts.metrics.increment('ingest_run_failed', 1, { runId, stage: 'ingest', code: 'FATAL_INGEST' });
+    opts.metrics.increment('ingest_run_failed', 1, { runId, stage: 'ingest', code: 'ExtractionFailedError' });
   }
 
   return {
@@ -156,6 +168,7 @@ export async function ingestOnce(opts: {
     processed_message_ids,
     attachment_filenames,
     attachment_sizes,
+    attachment_reject_reasons,
     errors
   };
 }

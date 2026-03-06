@@ -6,15 +6,15 @@ describe('ingest CLI summary error handling', () => {
     expect(getSummaryErrorMessage({ errors: [] })).toBeUndefined();
   });
 
-  it('includes first error code/stage/message when summary has errors', () => {
+  it('includes first error kind/stage/message when summary has errors', () => {
     const message = getSummaryErrorMessage({
       errors: [
-        { code: 'FATAL_INGEST', stage: 'ingest', message: 'download failed' },
-        { code: 'OTHER', stage: 'parse', message: 'ignored for log line' }
+        { kind: 'ExtractionFailedError', stage: 'ingest', messageId: 'm-1', message: 'download failed' },
+        { kind: 'BodyMissingError', stage: 'cleaning', messageId: 'm-2', message: 'ignored for log line' }
       ]
     });
 
     expect(message).toContain('2 error(s)');
-    expect(message).toContain('FATAL_INGEST/ingest download failed');
+    expect(message).toContain('ExtractionFailedError/ingest download failed');
   });
 });

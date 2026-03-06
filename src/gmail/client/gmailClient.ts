@@ -8,17 +8,39 @@ export type MessageMetadata = {
   to?: string;
   subject?: string;
   snippet?: string;
-  bodyText?: string;
+  rawBodyCandidate?: string;
+  normalizedBodyCandidate?: string;
+  bodyExtractionSource?: 'text/plain' | 'text/html-fallback';
   bodyCharCount?: number;
   bodyTruncated?: boolean;
 };
 
+export type AttachmentRejectReason =
+  | 'missing_filename'
+  | 'missing_attachment_id'
+  | 'size_exceeds_max_bytes'
+  | 'mime_not_allowed'
+  | 'extension_not_allowed'
+  | 'archive_not_allowed'
+  | 'archive_expansion_ratio_unknown'
+  | 'archive_expansion_ratio_exceeded';
+
+export type AttachmentPolicy = {
+  maxBytes: number;
+  allowedMimeTypes: string[];
+  allowedExtensions: string[];
+  allowArchives: boolean;
+  maxArchiveExpansionRatio: number;
+};
+
 export type AttachmentMetadata = {
-  attachmentId: string;
+  attachmentId?: string;
   filename: string;
   mimeType?: string;
   size?: number;
   data?: Buffer;
+  rejected: boolean;
+  rejectReason?: AttachmentRejectReason;
 };
 
 function header(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, key: string) {
@@ -48,18 +70,90 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): { plain:
   return { plain: plain.trim(), html: html.trim() };
 }
 
-function normalizeBody(plain: string, html: string, maxChars: number): { bodyText: string; bodyCharCount: number; bodyTruncated: boolean } {
-  const source = plain || htmlToText(html);
-  const normalized = source.replace(/\s+/g, ' ').trim();
+function normalizeBody(
+  plain: string,
+  html: string,
+  maxChars: number
+): {
+  rawBodyCandidate: string;
+  normalizedBodyCandidate: string;
+  bodyExtractionSource: 'text/plain' | 'text/html-fallback';
+  bodyCharCount: number;
+  bodyTruncated: boolean;
+} {
+  const bodyExtractionSource = plain ? 'text/plain' : 'text/html-fallback';
+  const rawBodyCandidate = plain || htmlToText(html);
+  const normalized = rawBodyCandidate.replace(/\s+/g, ' ').trim();
   const truncated = normalized.length > maxChars;
-  const bodyText = truncated ? normalized.slice(0, maxChars) : normalized;
-  return { bodyText, bodyCharCount: normalized.length, bodyTruncated: truncated };
+  const normalizedBodyCandidate = truncated ? normalized.slice(0, maxChars) : normalized;
+  return { rawBodyCandidate, normalizedBodyCandidate, bodyExtractionSource, bodyCharCount: normalized.length, bodyTruncated: truncated };
 }
 
 function extensionAllowed(filename: string, allow: string[]): boolean {
   const idx = filename.lastIndexOf('.');
   if (idx < 0) return false;
   return allow.includes(filename.slice(idx + 1).toLowerCase());
+}
+
+function isArchiveMime(mimeType?: string): boolean {
+  if (!mimeType) return false;
+  const normalized = mimeType.toLowerCase();
+  return normalized === 'application/zip' || normalized === 'application/x-zip-compressed' || normalized === 'multipart/x-zip';
+}
+
+function isArchiveFilename(filename: string): boolean {
+  return filename.toLowerCase().endsWith('.zip');
+}
+
+function shouldAllowByMimeOrExtension(meta: { filename: string; mimeType?: string }, policy: AttachmentPolicy): AttachmentRejectReason | undefined {
+  const mime = meta.mimeType?.toLowerCase();
+  const archive = isArchiveMime(mime) || isArchiveFilename(meta.filename);
+
+  if (archive && !policy.allowArchives) return 'archive_not_allowed';
+  if (archive && policy.allowArchives) return undefined;
+
+  if (mime && policy.allowedMimeTypes.includes(mime)) return undefined;
+
+  // Extension allowlist is secondary heuristic for missing/generic MIME.
+  if (!mime || mime === 'application/octet-stream') {
+    return extensionAllowed(meta.filename, policy.allowedExtensions) ? undefined : 'extension_not_allowed';
+  }
+
+  return 'mime_not_allowed';
+}
+
+function computeZipExpansionRatio(data: Buffer): number | undefined {
+  const CDFH_SIGNATURE = 0x02014b50;
+  let offset = 0;
+  let compressedTotal = 0;
+  let uncompressedTotal = 0;
+
+  while (offset + 46 <= data.length) {
+    const signature = data.readUInt32LE(offset);
+    if (signature !== CDFH_SIGNATURE) {
+      offset += 1;
+      continue;
+    }
+
+    const compressed = data.readUInt32LE(offset + 20);
+    const uncompressed = data.readUInt32LE(offset + 24);
+    const filenameLength = data.readUInt16LE(offset + 28);
+    const extraLength = data.readUInt16LE(offset + 30);
+    const commentLength = data.readUInt16LE(offset + 32);
+
+    // Zip64 or unknown values are unsupported in this lightweight parser.
+    if (compressed === 0xffffffff || uncompressed === 0xffffffff) return undefined;
+
+    compressedTotal += compressed;
+    uncompressedTotal += uncompressed;
+
+    const next = offset + 46 + filenameLength + extraLength + commentLength;
+    if (next <= offset) return undefined;
+    offset = next;
+  }
+
+  if (compressedTotal <= 0) return undefined;
+  return uncompressedTotal / compressedTotal;
 }
 
 const SYSTEM_LABELS = new Set(['INBOX', 'SPAM', 'TRASH', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS']);
@@ -136,7 +230,7 @@ export class GmailClient {
     return { ...base, ...norm };
   }
 
-  async getAttachments(messageId: string, allowExtensions: string[], downloadBytes: boolean): Promise<AttachmentMetadata[]> {
+  async getAttachments(messageId: string, policy: AttachmentPolicy, downloadBytes: boolean): Promise<AttachmentMetadata[]> {
     const res = await this.gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
     const out: AttachmentMetadata[] = [];
     const parts = [...(res.data.payload?.parts ?? [])];
@@ -145,11 +239,46 @@ export class GmailClient {
       if (part.parts) parts.push(...part.parts);
       const attachmentId = part.body?.attachmentId;
       const filename = part.filename ?? '';
-      if (!attachmentId || !filename || !extensionAllowed(filename, allowExtensions)) continue;
-      const meta: AttachmentMetadata = { attachmentId, filename, mimeType: part.mimeType ?? undefined, size: part.body?.size ?? undefined };
+      const mimeType = part.mimeType ?? undefined;
+      const size = part.body?.size ?? undefined;
+
+      if (!filename) {
+        out.push({ filename: '', mimeType, size, rejected: true, rejectReason: 'missing_filename' });
+        continue;
+      }
+      if (!attachmentId) {
+        out.push({ filename, mimeType, size, rejected: true, rejectReason: 'missing_attachment_id' });
+        continue;
+      }
+      if (typeof size === 'number' && size > policy.maxBytes) {
+        out.push({ attachmentId, filename, mimeType, size, rejected: true, rejectReason: 'size_exceeds_max_bytes' });
+        continue;
+      }
+
+      const rejectReason = shouldAllowByMimeOrExtension({ filename, mimeType }, policy);
+      if (rejectReason) {
+        out.push({ attachmentId, filename, mimeType, size, rejected: true, rejectReason });
+        continue;
+      }
+
+      const meta: AttachmentMetadata = { attachmentId, filename, mimeType, size, rejected: false };
       if (downloadBytes) {
         const att = await this.gmail.users.messages.attachments.get({ userId: 'me', messageId, id: attachmentId });
         meta.data = Buffer.from((att.data.data ?? '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+        const isArchive = isArchiveMime(mimeType) || isArchiveFilename(filename);
+        if (isArchive) {
+          const ratio = computeZipExpansionRatio(meta.data);
+          if (ratio === undefined) {
+            meta.rejected = true;
+            meta.rejectReason = 'archive_expansion_ratio_unknown';
+            meta.data = undefined;
+          } else if (ratio > policy.maxArchiveExpansionRatio) {
+            meta.rejected = true;
+            meta.rejectReason = 'archive_expansion_ratio_exceeded';
+            meta.data = undefined;
+          }
+        }
       }
       out.push(meta);
     }
