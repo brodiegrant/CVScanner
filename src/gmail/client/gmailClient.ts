@@ -62,21 +62,42 @@ function extensionAllowed(filename: string, allow: string[]): boolean {
   return allow.includes(filename.slice(idx + 1).toLowerCase());
 }
 
+const SYSTEM_LABELS = new Set(['INBOX', 'SPAM', 'TRASH', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS']);
+
 export class GmailClient {
   private gmail: gmail_v1.Gmail;
+  private readonly labelIdCache = new Map<string, string>();
   constructor(auth: any) {
     this.gmail = google.gmail({ version: 'v1', auth });
+  }
+
+
+  private async resolveLabelId(label: string): Promise<string> {
+    if (this.labelIdCache.has(label)) return this.labelIdCache.get(label)!;
+
+    if (label.startsWith('Label_') || SYSTEM_LABELS.has(label)) {
+      this.labelIdCache.set(label, label);
+      return label;
+    }
+
+    const res = await this.gmail.users.labels.list({ userId: 'me' });
+    const found = res.data.labels?.find((l) => l.name === label || l.id === label);
+    if (!found?.id) throw new Error(`Gmail label not found: ${label}`);
+
+    this.labelIdCache.set(label, found.id);
+    return found.id;
   }
 
   async listMessageIds(label: string, afterInternalDateMs: number): Promise<string[]> {
     const afterSec = Math.floor(afterInternalDateMs / 1000);
     const q = `after:${afterSec}`;
+    const labelId = await this.resolveLabelId(label);
     const ids: string[] = [];
     let pageToken: string | undefined;
     do {
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        labelIds: [label],
+        labelIds: [labelId],
         q,
         maxResults: 100,
         pageToken
@@ -94,9 +115,9 @@ export class GmailClient {
       messageId: msg.id!,
       threadId: msg.threadId ?? undefined,
       internalDate: Number(msg.internalDate ?? '0'),
-      from: header(msg.payload?.headers, 'from'),
-      to: header(msg.payload?.headers, 'to'),
-      subject: header(msg.payload?.headers, 'subject'),
+      from: header(msg.payload?.headers, 'from') ?? undefined,
+      to: header(msg.payload?.headers, 'to') ?? undefined,
+      subject: header(msg.payload?.headers, 'subject') ?? undefined,
       snippet: msg.snippet ?? undefined
     };
     if (!includeBody) return base;

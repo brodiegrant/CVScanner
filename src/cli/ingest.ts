@@ -38,6 +38,11 @@ async function main() {
   });
 
   process.stdout.write(`${JSON.stringify(summary)}\n`);
+  if (summary.errors.length > 0) {
+    const first = summary.errors[0];
+    process.stderr.write(`Ingest failed: [${first.code}] ${first.stage}: ${first.message}\n`);
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

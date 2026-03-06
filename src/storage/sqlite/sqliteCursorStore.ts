@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { Cursor, CursorStore } from '../cursorStore.js';
 
 export class SqliteCursorStore implements CursorStore {
-  private readonly db: Database.Database;
+  private readonly db: any;
 
   constructor(dbPath: string) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });

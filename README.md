@@ -6,7 +6,7 @@ Gmail OAuth + ingestion layer for CV intake.
 - One-time OAuth consent using localhost callback.
 - Encrypted token storage in SQLite (AES-256-GCM).
 - Incremental/idempotent ingest using timestamp watermark + message-id dedupe window.
-- Label-based Gmail read (`Process` by default).
+- Label-based Gmail read (`Process` by default, label names auto-resolved to Gmail label IDs).
 - Attachment filtering (default `pdf,doc,docx`).
 - Body-to-LLM handoff (`screeningSourceText`) with log redaction safeguards.
 - JSON structured logs + JSONL metrics sink.

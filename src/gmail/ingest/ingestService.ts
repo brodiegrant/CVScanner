@@ -5,6 +5,8 @@ import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
 
+const CURSOR_OVERLAP_MS = 1000;
+
 export type IngestForLlm = {
   runId: string;
   accountEmail: string;
@@ -60,7 +62,8 @@ export async function ingestOnce(opts: {
   try {
     const cursor = opts.cursorStore.getCursor(opts.accountEmail, label);
     const since = cursor?.lastSuccessInternalDate ?? 0;
-    const ids = await opts.gmailClient.listMessageIds(label, since);
+    const querySince = Math.max(0, since - CURSOR_OVERLAP_MS);
+    const ids = await opts.gmailClient.listMessageIds(label, querySince);
     found = ids.length;
 
     const messages = await Promise.all(ids.map((id) => opts.gmailClient.getMessageMetadata(id, opts.config.ingestIncludeBody, opts.config.ingestBodyMaxChars)));
