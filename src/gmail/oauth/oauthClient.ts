@@ -56,31 +56,16 @@ export function createAuthorizedClient(config: AppConfig, tokenStore: TokenStore
   });
 
   oauth2Client.on('tokens', (tokens) => {
-    tokenStore.merge(accountEmail, {
-      accessToken: tokens.access_token ?? undefined,
-      refreshToken: typeof tokens.refresh_token === 'string' && tokens.refresh_token.length > 0 ? tokens.refresh_token : undefined,
-      expiryDate: tokens.expiry_date ?? undefined
-    });
-    const latest = tokenStore.get(accountEmail) ?? stored;
-    const accessToken = tokens.access_token ?? latest.accessToken;
-    const refreshToken = tokens.refresh_token && tokens.refresh_token.length > 0
-      ? tokens.refresh_token
-      : latest.refreshToken;
-    const expiryDate = tokens.expiry_date ?? latest.expiryDate;
-    if (!tokens.access_token || !tokens.expiry_date) return;
+    if (typeof tokens.refresh_token === 'string' && tokens.refresh_token.trim().length > 0) {
+      tokenStore.merge(accountEmail, { refreshToken: tokens.refresh_token });
+    }
 
-    tokenStore.mergeUpsert(accountEmail, {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiryDate: tokens.expiry_date
-    });
-    const current = tokenStore.get(accountEmail);
-    if (!current) return;
-
-    const accessToken = tokens.access_token ?? current.accessToken;
-    const refreshToken = tokens.refresh_token && tokens.refresh_token.trim() ? tokens.refresh_token : current.refreshToken;
-    const expiryDate = tokens.expiry_date ?? current.expiryDate;
-    tokenStore.upsert({ accountEmail, accessToken, refreshToken, expiryDate });
+    if (tokens.access_token !== undefined || tokens.expiry_date !== undefined) {
+      tokenStore.merge(accountEmail, {
+        accessToken: tokens.access_token,
+        expiryDate: tokens.expiry_date
+      });
+    }
   });
 
   return oauth2Client;
