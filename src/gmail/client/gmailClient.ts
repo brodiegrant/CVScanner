@@ -66,29 +66,39 @@ const SYSTEM_LABELS = new Set(['INBOX', 'SPAM', 'TRASH', 'UNREAD', 'STARRED', 'I
 
 export class GmailClient {
   private gmail: gmail_v1.Gmail;
-  private readonly labelIdCache = new Map<string, string>();
+  private resolvedLabelIds = new Map<string, string>();
+
   constructor(auth: any) {
     this.gmail = google.gmail({ version: 'v1', auth });
   }
 
+  async resolveLabelId(label: string): Promise<string> {
+    const configuredLabel = label.trim();
+    const cached = this.resolvedLabelIds.get(configuredLabel);
+    if (cached) return cached;
 
-  private async resolveLabelId(label: string): Promise<string> {
-    if (this.labelIdCache.has(label)) return this.labelIdCache.get(label)!;
-
-    if (label.startsWith('Label_') || SYSTEM_LABELS.has(label)) {
-      this.labelIdCache.set(label, label);
-      return label;
+    const listRes = await this.gmail.users.labels.list({ userId: 'me' });
+    const labels = listRes.data.labels ?? [];
+    const directMatch = labels.find((entry) => entry.id === configuredLabel);
+    const nameMatch = labels.find((entry) => entry.name === configuredLabel);
+    const caseInsensitiveNameMatch = labels.find((entry) => entry.name?.toLowerCase() === configuredLabel.toLowerCase());
+    const candidateId = directMatch?.id ?? nameMatch?.id ?? caseInsensitiveNameMatch?.id;
+    if (!candidateId) {
+      throw new Error(`Gmail label not found: ${configuredLabel}`);
     }
 
-    const res = await this.gmail.users.labels.list({ userId: 'me' });
-    const found = res.data.labels?.find((l) => l.name === label || l.id === label);
-    if (!found?.id) throw new Error(`Gmail label not found: ${label}`);
-
-    this.labelIdCache.set(label, found.id);
-    return found.id;
+    const labelRes = await this.gmail.users.labels.get({ userId: 'me', id: candidateId });
+    const resolvedId = labelRes.data.id ?? candidateId;
+    this.resolvedLabelIds.set(configuredLabel, resolvedId);
+    if (labelRes.data.name) this.resolvedLabelIds.set(labelRes.data.name, resolvedId);
+    this.resolvedLabelIds.set(resolvedId, resolvedId);
+    return resolvedId;
   }
 
   async listMessageIds(label: string, afterInternalDateMs: number): Promise<string[]> {
+    // Gmail search `after:` operates at second precision, so callers should pass
+    // a bounded overlap window (not an exact previous cursor) to avoid missing
+    // messages around second-level boundaries.
     const afterSec = Math.floor(afterInternalDateMs / 1000);
     const q = `after:${afterSec}`;
     const labelId = await this.resolveLabelId(label);
@@ -97,7 +107,7 @@ export class GmailClient {
     do {
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        labelIds: [labelId],
+        labelIds: [resolvedLabelId],
         q,
         maxResults: 100,
         pageToken

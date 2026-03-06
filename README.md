@@ -6,7 +6,7 @@ Gmail OAuth + ingestion layer for CV intake.
 - One-time OAuth consent using localhost callback.
 - Encrypted token storage in SQLite (AES-256-GCM).
 - Incremental/idempotent ingest using timestamp watermark + message-id dedupe window.
-- Label-based Gmail read (`Process` by default, label names auto-resolved to Gmail label IDs).
+- Label-based Gmail read (`Process` by default), accepting either label name or Gmail label ID.
 - Attachment filtering (default `pdf,doc,docx`).
 - Body-to-LLM handoff (`screeningSourceText`) with log redaction safeguards.
 - JSON structured logs + JSONL metrics sink.
@@ -37,7 +37,7 @@ Set `.env` values:
 - `TOKEN_ENC_KEY=<base64_32_byte_key>`
 - `SQLITE_PATH=./data/cvscanner.db`
 - `METRICS_JSONL_PATH=./data/metrics.jsonl`
-- optional `GMAIL_LABEL=Process`
+- optional `GMAIL_LABEL=Process` (label name or ID; names are resolved to IDs at runtime)
 
 ## Commands
 Connect account (one-time consent):
@@ -54,6 +54,12 @@ Dry-run ingestion (metadata + body extraction, no attachment bytes download):
 ```bash
 npm run ingest -- --account=<email> --label="Process" --dry-run
 ```
+
+
+## Gmail label configuration
+- `--label` and `GMAIL_LABEL` accept either a Gmail label name (for example `Process`) or a Gmail label ID (for example `Label_123456789`).
+- During ingestion, the client resolves names to canonical Gmail label IDs via the Labels API and then uses those IDs for message listing.
+- Existing configurations that already pass a label name continue to work; no migration is required.
 
 ## Scheduling (cron every 5 min)
 ```cron
