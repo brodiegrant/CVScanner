@@ -1,10 +1,19 @@
 import { exec } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { google } from 'googleapis';
 import { AppConfig } from '../../config/config.js';
 import { waitForOAuthCode } from './oauthServer.js';
 import { TokenStore, TokenUpdate } from '../../storage/tokenStore.js';
 
 const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+
+function randomBase64Url(bytes: number) {
+  return randomBytes(bytes)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
 
 function openBrowser(url: string) {
   const cmd = process.platform === 'darwin' ? `open "${url}"` : process.platform === 'win32' ? `start "" "${url}"` : `xdg-open "${url}"`;
@@ -15,15 +24,21 @@ export async function connectAccount(config: AppConfig, tokenStore: TokenStore):
   const redirectUri = `http://${config.oauth.redirectHost}:${config.oauth.redirectPort}/oauth/callback`;
   const oauth2Client = new google.auth.OAuth2(config.oauth.clientId, config.oauth.clientSecret, redirectUri);
 
+  const state = randomBase64Url(24);
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: [GMAIL_READONLY_SCOPE]
+    scope: [GMAIL_READONLY_SCOPE],
+    state
   });
 
   openBrowser(authUrl);
-  const code = await waitForOAuthCode(config.oauth.redirectHost, config.oauth.redirectPort);
-  const { tokens } = await oauth2Client.getToken(code);
+  const callback = await waitForOAuthCode(config.oauth.redirectHost, config.oauth.redirectPort);
+  if (!callback.state || callback.state !== state) {
+    throw new Error('OAuth state mismatch. Please retry account connection.');
+  }
+
+  const { tokens } = await oauth2Client.getToken(callback.code);
   oauth2Client.setCredentials(tokens);
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
