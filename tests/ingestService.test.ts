@@ -133,4 +133,32 @@ describe('ingestOnce', () => {
     expect(r2.counts.processed).toBe(1);
     expect(r2.processed_message_ids).toEqual(['m2']);
   });
+
+  it('builds ingest provenance with message and attachment origin metadata', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing-prov-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+    let captured: any;
+
+    class ProvenanceGmail extends FakeGmail {
+      async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
+        return [{ attachmentId: `att-${id}`, filename: `${id}.pdf`, mimeType: 'application/pdf', size: 10, data: downloadBytes ? Buffer.from('pdf-data') : undefined }];
+      }
+    }
+
+    await ingestOnce({
+      accountEmail: 'a@b.com',
+      config,
+      gmailClient: new ProvenanceGmail() as any,
+      cursorStore: store,
+      metrics: new NoopMetrics(),
+      onMessage: async (m) => {
+        captured = m;
+      }
+    });
+
+    expect(captured.provenance.message.messageId).toBe('m2');
+    expect(captured.provenance.preExtractionArtifacts.some((artifact: any) => artifact.origin.gmailAttachmentId === 'att-m2')).toBe(true);
+    expect(captured.attachments[0].attachmentId).toBe('att-m2');
+  });
+
 });
