@@ -27,4 +27,36 @@ describe('SqliteTokenStore', () => {
     store.upsert({ accountEmail: 'a@b.com', accessToken: 'a2', refreshToken: 'r1', expiryDate: 200 });
     expect(store.get('a@b.com')).toEqual({ accountEmail: 'a@b.com', accessToken: 'a2', refreshToken: 'r1', expiryDate: 200 });
   });
+
+  it('updates access token without refreshToken and preserves refresh ciphertext fields', () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-${Date.now()}-preserve.db`);
+    const key = Buffer.alloc(32, 9).toString('base64');
+    const store = new SqliteTokenStore(dbPath, key);
+
+    store.upsert({ accountEmail: 'a@b.com', accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
+
+    store.mergeUpsert('a@b.com', { accessToken: 'a2', expiryDate: 200 });
+    expect(store.get('a@b.com')).toEqual({ accountEmail: 'a@b.com', accessToken: 'a2', refreshToken: 'r1', expiryDate: 200 });
+  });
+
+  it('replaces refresh token material when refreshToken is provided', () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-${Date.now()}-rotate.db`);
+    const key = Buffer.alloc(32, 9).toString('base64');
+    const store = new SqliteTokenStore(dbPath, key);
+
+    store.upsert({ accountEmail: 'a@b.com', accessToken: 'a1', refreshToken: 'r1', expiryDate: 100 });
+
+    store.mergeUpsert('a@b.com', { accessToken: 'a2', refreshToken: 'r2', expiryDate: 200 });
+    expect(store.get('a@b.com')).toEqual({ accountEmail: 'a@b.com', accessToken: 'a2', refreshToken: 'r2', expiryDate: 200 });
+  });
+
+  it('throws when mergeUpsert without refreshToken is used for a new row', () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-${Date.now()}-new-row.db`);
+    const key = Buffer.alloc(32, 9).toString('base64');
+    const store = new SqliteTokenStore(dbPath, key);
+
+    expect(() => {
+      store.mergeUpsert('new@b.com', { accessToken: 'a1', expiryDate: 100 });
+    }).toThrow(/requires refreshToken when creating a new token row/);
+  });
 });
