@@ -5,6 +5,7 @@ import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
 import { PipelineError } from '../../pipeline/errors.js';
+import { Provenance, buildIngestProvenance } from '../../pipeline/provenance.js';
 
 const CURSOR_OVERLAP_MS = 1000;
 
@@ -26,7 +27,16 @@ export type IngestForLlm = {
   bodyCharCount?: number;
   bodyTruncated?: boolean;
   contentHash?: string;
-  attachments: { filename: string; mimeType?: string; size?: number; data?: Buffer; rejected: boolean; rejectReason?: AttachmentRejectReason }[];
+  attachments: {
+    attachmentId?: string;
+    filename: string;
+    mimeType?: string;
+    size?: number;
+    data?: Buffer;
+    rejected: boolean;
+    rejectReason?: AttachmentRejectReason;
+  }[];
+  provenance: Provenance;
   sensitivity: 'contains_pii';
 };
 
@@ -48,7 +58,7 @@ export type RunSummary = {
   attachment_filenames: string[];
   attachment_sizes: number[];
   attachment_reject_reasons: { filename: string; reason: AttachmentRejectReason }[];
-  errors: { code: string; message: string; stage: string }[];
+  errors: PipelineError[];
 };
 
 export async function ingestOnce(opts: {
@@ -127,7 +137,31 @@ export async function ingestOnce(opts: {
         bodyCharCount: m.bodyCharCount,
         bodyTruncated: m.bodyTruncated,
         contentHash: m.normalizedBodyCandidate ? crypto.createHash('sha256').update(m.normalizedBodyCandidate).digest('hex') : undefined,
-        attachments: atts.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data })),
+        attachments: atts.map((a) => ({
+          attachmentId: a.attachmentId,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size: a.size,
+          data: a.data,
+          rejected: a.rejected,
+          rejectReason: a.rejectReason
+        })),
+        provenance: buildIngestProvenance({
+          runId,
+          accountEmail: opts.accountEmail,
+          label,
+          messageId: m.messageId,
+          threadId: m.threadId,
+          internalDate: m.internalDate,
+          screeningSourceText: m.normalizedBodyCandidate,
+          attachments: atts.map((a) => ({
+            filename: a.filename,
+            mimeType: a.mimeType,
+            size: a.size,
+            attachmentId: a.attachmentId,
+            data: a.data
+          }))
+        }),
         sensitivity: 'contains_pii'
       };
 

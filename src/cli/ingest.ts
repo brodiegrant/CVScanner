@@ -39,15 +39,8 @@ async function main() {
       const cleaned = runCleaningPipeline({
         raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
         body_text: msg.screeningSourceText,
-        provenance: {
-          source: 'gmail_ingest',
-          run_id: msg.runId,
-          account_email: msg.accountEmail,
-          message_id: msg.messageId,
-          thread_id: msg.threadId,
-          internal_date: msg.internalDate,
-          label: msg.label
-        }
+        provenance: msg.provenance,
+        message_id: msg.messageId
       });
 
       process.stdout.write(`${JSON.stringify(cleaned)}\n`);

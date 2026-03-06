@@ -6,7 +6,12 @@ export function runCleaningPipeline(input: CleaningInputDto): CleaningOutputDto 
   const errors: CleaningOutputDto['errors'] = [];
 
   if (!input.raw_text.trim()) {
-    errors.push({ code: 'EMPTY_RAW_TEXT', message: 'raw_text is empty after trimming' });
+    errors.push({
+      kind: 'BodyMissingError',
+      stage: 'cleaning',
+      messageId: input.message_id,
+      message: 'raw_text is empty after trimming'
+    });
   }
 
   const rawText = input.raw_text;
