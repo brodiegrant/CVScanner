@@ -117,6 +117,46 @@ export class SqliteTokenStore implements TokenStore {
     });
   }
 
+  merge(accountEmail: string, update: TokenUpdate): void {
+    const runMerge = this.db.transaction(() => {
+      const current = this.get(accountEmail);
+      if (!current) throw new Error(`No stored token for account ${accountEmail}`);
+
+      const nextAccessToken = update.accessToken ?? current.accessToken;
+      const nextExpiryDate = update.expiryDate ?? current.expiryDate;
+      const shouldUpdateRefresh = typeof update.refreshToken === 'string' && update.refreshToken.length > 0;
+
+      const access = encryptString(nextAccessToken, this.key);
+      const refresh = shouldUpdateRefresh ? encryptString(update.refreshToken as string, this.key) : null;
+
+      this.db.prepare(`
+        UPDATE oauth_tokens
+        SET
+          access_cipher = @accessCipher,
+          access_iv = @accessIv,
+          access_tag = @accessTag,
+          refresh_cipher = COALESCE(@refreshCipher, refresh_cipher),
+          refresh_iv = COALESCE(@refreshIv, refresh_iv),
+          refresh_tag = COALESCE(@refreshTag, refresh_tag),
+          expiry_date = @expiryDate,
+          updated_at = @now
+        WHERE account_email = @accountEmail
+      `).run({
+        accountEmail,
+        accessCipher: access.ciphertext,
+        accessIv: access.iv,
+        accessTag: access.tag,
+        refreshCipher: refresh?.ciphertext ?? null,
+        refreshIv: refresh?.iv ?? null,
+        refreshTag: refresh?.tag ?? null,
+        expiryDate: nextExpiryDate,
+        now: new Date().toISOString()
+      });
+    });
+
+    runMerge();
+  }
+
   get(accountEmail: string): StoredToken | null {
     const row = this.db.prepare('SELECT * FROM oauth_tokens WHERE account_email = ?').get(accountEmail) as Record<string, unknown> | undefined;
     if (!row) return null;

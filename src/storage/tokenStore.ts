@@ -13,6 +13,7 @@ export type TokenUpdate = {
 
 export interface TokenStore {
   upsert(token: StoredToken): void;
+  merge(accountEmail: string, update: TokenUpdate): void;
   mergeUpsert(accountEmail: string, patch: TokenUpdate): void;
   get(accountEmail: string): StoredToken | null;
 }
