@@ -8,7 +8,9 @@ export type MessageMetadata = {
   to?: string;
   subject?: string;
   snippet?: string;
-  bodyText?: string;
+  rawBodyCandidate?: string;
+  normalizedBodyCandidate?: string;
+  bodyExtractionSource?: 'text/plain' | 'text/html-fallback';
   bodyCharCount?: number;
   bodyTruncated?: boolean;
 };
@@ -48,12 +50,23 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): { plain:
   return { plain: plain.trim(), html: html.trim() };
 }
 
-function normalizeBody(plain: string, html: string, maxChars: number): { bodyText: string; bodyCharCount: number; bodyTruncated: boolean } {
-  const source = plain || htmlToText(html);
-  const normalized = source.replace(/\s+/g, ' ').trim();
+function normalizeBody(
+  plain: string,
+  html: string,
+  maxChars: number
+): {
+  rawBodyCandidate: string;
+  normalizedBodyCandidate: string;
+  bodyExtractionSource: 'text/plain' | 'text/html-fallback';
+  bodyCharCount: number;
+  bodyTruncated: boolean;
+} {
+  const bodyExtractionSource = plain ? 'text/plain' : 'text/html-fallback';
+  const rawBodyCandidate = plain || htmlToText(html);
+  const normalized = rawBodyCandidate.replace(/\s+/g, ' ').trim();
   const truncated = normalized.length > maxChars;
-  const bodyText = truncated ? normalized.slice(0, maxChars) : normalized;
-  return { bodyText, bodyCharCount: normalized.length, bodyTruncated: truncated };
+  const normalizedBodyCandidate = truncated ? normalized.slice(0, maxChars) : normalized;
+  return { rawBodyCandidate, normalizedBodyCandidate, bodyExtractionSource, bodyCharCount: normalized.length, bodyTruncated: truncated };
 }
 
 function extensionAllowed(filename: string, allow: string[]): boolean {
