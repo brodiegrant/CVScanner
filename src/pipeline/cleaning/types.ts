@@ -1,3 +1,6 @@
+import type { PipelineError } from '../errors.js';
+import type { Provenance } from '../provenance.js';
+
 export type CleaningSignals = {
   confidence: number;
   quality: number;
@@ -17,25 +20,11 @@ export type CleaningPii = {
   ssn_count: number;
 };
 
-export type CleaningProvenance = {
-  source: string;
-  run_id?: string;
-  account_email?: string;
-  message_id?: string;
-  thread_id?: string;
-  internal_date?: number;
-  label?: string;
-};
-
-export type CleaningError = {
-  code: string;
-  message: string;
-};
-
 export type CleaningInputDto = {
   raw_text: string;
   body_text?: string;
-  provenance: CleaningProvenance;
+  provenance: Provenance;
+  message_id: string;
 };
 
 export type CleaningOutputDto = {
@@ -44,6 +33,6 @@ export type CleaningOutputDto = {
   body_text: string;
   signals: CleaningSignals;
   pii: CleaningPii;
-  provenance: CleaningProvenance;
-  errors: CleaningError[];
+  provenance: Provenance;
+  errors: PipelineError[];
 };

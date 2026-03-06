@@ -39,9 +39,9 @@ class FakeGmail {
       bodyExtractionSource: 'text/plain' as const
     };
   }
-  async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
+  async getAttachments(id: string, _policy?: unknown, downloadBytes?: boolean) {
     if (this.failOn === id) throw new Error('download failed');
-    return [{ filename: `${id}.pdf`, size: 10, data: downloadBytes ? Buffer.alloc(10) : undefined }];
+    return [{ attachmentId: `att-${id}`, filename: `${id}.pdf`, size: 10, data: downloadBytes ? Buffer.alloc(10) : undefined, rejected: false }];
   }
 }
 
@@ -140,8 +140,8 @@ describe('ingestOnce', () => {
     let captured: any;
 
     class ProvenanceGmail extends FakeGmail {
-      async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
-        return [{ attachmentId: `att-${id}`, filename: `${id}.pdf`, mimeType: 'application/pdf', size: 10, data: downloadBytes ? Buffer.from('pdf-data') : undefined }];
+      async getAttachments(id: string, _policy?: unknown, downloadBytes?: boolean) {
+        return [{ attachmentId: `att-${id}`, filename: `${id}.pdf`, mimeType: 'application/pdf', size: 10, data: downloadBytes ? Buffer.from('pdf-data') : undefined, rejected: false }];
       }
     }
 
