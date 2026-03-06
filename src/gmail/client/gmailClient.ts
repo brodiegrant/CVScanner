@@ -64,8 +64,33 @@ function extensionAllowed(filename: string, allow: string[]): boolean {
 
 export class GmailClient {
   private gmail: gmail_v1.Gmail;
+  private resolvedLabelIds = new Map<string, string>();
+
   constructor(auth: any) {
     this.gmail = google.gmail({ version: 'v1', auth });
+  }
+
+  async resolveLabelId(label: string): Promise<string> {
+    const configuredLabel = label.trim();
+    const cached = this.resolvedLabelIds.get(configuredLabel);
+    if (cached) return cached;
+
+    const listRes = await this.gmail.users.labels.list({ userId: 'me' });
+    const labels = listRes.data.labels ?? [];
+    const directMatch = labels.find((entry) => entry.id === configuredLabel);
+    const nameMatch = labels.find((entry) => entry.name === configuredLabel);
+    const caseInsensitiveNameMatch = labels.find((entry) => entry.name?.toLowerCase() === configuredLabel.toLowerCase());
+    const candidateId = directMatch?.id ?? nameMatch?.id ?? caseInsensitiveNameMatch?.id;
+    if (!candidateId) {
+      throw new Error(`Gmail label not found: ${configuredLabel}`);
+    }
+
+    const labelRes = await this.gmail.users.labels.get({ userId: 'me', id: candidateId });
+    const resolvedId = labelRes.data.id ?? candidateId;
+    this.resolvedLabelIds.set(configuredLabel, resolvedId);
+    if (labelRes.data.name) this.resolvedLabelIds.set(labelRes.data.name, resolvedId);
+    this.resolvedLabelIds.set(resolvedId, resolvedId);
+    return resolvedId;
   }
 
   async listMessageIds(label: string, afterInternalDateMs: number): Promise<string[]> {
@@ -79,7 +104,7 @@ export class GmailClient {
     do {
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        labelIds: [label],
+        labelIds: [resolvedLabelId],
         q,
         maxResults: 100,
         pageToken
