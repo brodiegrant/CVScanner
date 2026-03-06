@@ -4,6 +4,7 @@ import { AttachmentRejectReason, GmailClient } from '../client/gmailClient.js';
 import { CursorStore } from '../../storage/cursorStore.js';
 import { createLogger } from '../../observability/logger.js';
 import { Metrics } from '../../observability/metrics.js';
+import { PipelineError } from '../../pipeline/errors.js';
 
 const CURSOR_OVERLAP_MS = 1000;
 
@@ -143,10 +144,18 @@ export async function ingestOnce(opts: {
     opts.cursorStore.pruneProcessed(opts.accountEmail, label, opts.config.dedupeLookbackDays);
     opts.metrics.increment('ingest_run_completed', 1, { runId, accountEmail: opts.accountEmail, label, processed });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown fatal error';
-    errors.push({ code: 'FATAL_INGEST', message, stage: 'ingest' });
+    const cause = err instanceof Error ? err : undefined;
+    const message = cause?.message ?? 'Unknown fatal error';
+    errors.push({
+      kind: 'ExtractionFailedError',
+      stage: 'ingest',
+      message,
+      messageId: '__run__',
+      reason: message,
+      cause
+    });
     logger.error('Ingest fatal error', { runId, accountEmail: opts.accountEmail, label, error: message });
-    opts.metrics.increment('ingest_run_failed', 1, { runId, stage: 'ingest', code: 'FATAL_INGEST' });
+    opts.metrics.increment('ingest_run_failed', 1, { runId, stage: 'ingest', code: 'ExtractionFailedError' });
   }
 
   return {

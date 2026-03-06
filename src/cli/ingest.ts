@@ -51,7 +51,7 @@ export function getSummaryErrorMessage(summary: Pick<RunSummary, 'errors'>): str
   if (summary.errors.length === 0) return undefined;
 
   const firstError = summary.errors[0];
-  return `ingest completed with ${summary.errors.length} error(s): ${firstError.code}/${firstError.stage} ${firstError.message}`;
+  return `ingest completed with ${summary.errors.length} error(s): ${firstError.kind}/${firstError.stage} ${firstError.message}`;
 }
 
 const entryUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
