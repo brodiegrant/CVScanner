@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { google } from 'googleapis';
 import { AppConfig } from '../../config/config.js';
 import { waitForOAuthCode } from './oauthServer.js';
-import { TokenStore } from '../../storage/tokenStore.js';
+import { TokenStore, TokenUpdate } from '../../storage/tokenStore.js';
 
 const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -56,31 +56,16 @@ export function createAuthorizedClient(config: AppConfig, tokenStore: TokenStore
   });
 
   oauth2Client.on('tokens', (tokens) => {
-    tokenStore.merge(accountEmail, {
+    const patch: TokenUpdate = {
       accessToken: tokens.access_token ?? undefined,
-      refreshToken: typeof tokens.refresh_token === 'string' && tokens.refresh_token.length > 0 ? tokens.refresh_token : undefined,
       expiryDate: tokens.expiry_date ?? undefined
-    });
-    const latest = tokenStore.get(accountEmail) ?? stored;
-    const accessToken = tokens.access_token ?? latest.accessToken;
-    const refreshToken = tokens.refresh_token && tokens.refresh_token.length > 0
-      ? tokens.refresh_token
-      : latest.refreshToken;
-    const expiryDate = tokens.expiry_date ?? latest.expiryDate;
-    if (!tokens.access_token || !tokens.expiry_date) return;
+    };
 
-    tokenStore.mergeUpsert(accountEmail, {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiryDate: tokens.expiry_date
-    });
-    const current = tokenStore.get(accountEmail);
-    if (!current) return;
+    if (typeof tokens.refresh_token === 'string' && tokens.refresh_token.trim().length > 0) {
+      patch.refreshToken = tokens.refresh_token;
+    }
 
-    const accessToken = tokens.access_token ?? current.accessToken;
-    const refreshToken = tokens.refresh_token && tokens.refresh_token.trim() ? tokens.refresh_token : current.refreshToken;
-    const expiryDate = tokens.expiry_date ?? current.expiryDate;
-    tokenStore.upsert({ accountEmail, accessToken, refreshToken, expiryDate });
+    tokenStore.merge(accountEmail, patch);
   });
 
   return oauth2Client;
