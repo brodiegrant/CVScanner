@@ -19,6 +19,10 @@ describe('environment boolean parsing', () => {
 
     expect(config.metricsEnabled).toBe(true);
     expect(config.ingestIncludeBody).toBe(true);
+    expect(config.maxAttachmentBytes).toBe(10 * 1024 * 1024);
+    expect(config.allowedAttachmentMimeTypes).toContain('application/pdf');
+    expect(config.allowAttachmentArchives).toBe(false);
+    expect(config.maxArchiveExpansionRatio).toBe(30);
   });
 
   it('parses "false" to false', () => {
@@ -39,6 +43,10 @@ describe('environment boolean parsing', () => {
 
     expect(config.metricsEnabled).toBe(true);
     expect(config.ingestIncludeBody).toBe(true);
+    expect(config.maxAttachmentBytes).toBe(10 * 1024 * 1024);
+    expect(config.allowedAttachmentMimeTypes).toContain('application/pdf');
+    expect(config.allowAttachmentArchives).toBe(false);
+    expect(config.maxArchiveExpansionRatio).toBe(30);
   });
 
   it('throws on invalid boolean values', () => {

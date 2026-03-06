@@ -9,7 +9,11 @@ const config = {
   defaultLabel: 'Process',
   dedupeLookbackDays: 14,
   logLevel: 'info',
+  maxAttachmentBytes: 10 * 1024 * 1024,
+  allowedAttachmentMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
   allowedAttachmentExtensions: ['pdf', 'doc', 'docx'],
+  allowAttachmentArchives: false,
+  maxArchiveExpansionRatio: 30,
   ingestBodyMaxChars: 1000,
   ingestIncludeBody: true
 } as any;
@@ -27,7 +31,7 @@ class FakeGmail {
     return this.ids;
   }
   async getMessageMetadata(id: string) { return { messageId: id, internalDate: this.internalDates[id] ?? 0, bodyText: 'screen answers' }; }
-  async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
+  async getAttachments(id: string, _policy?: unknown, downloadBytes?: boolean) {
     if (this.failOn === id) throw new Error('download failed');
     return [{ filename: `${id}.pdf`, size: 10, data: downloadBytes ? Buffer.alloc(10) : undefined }];
   }
