@@ -15,13 +15,17 @@ const config = {
 } as any;
 
 class FakeGmail {
-  lastSince?: number;
+  public lastSince?: number;
+
   constructor(
     private failOn?: string,
     private internalDates: Record<string, number> = { m1: 1000, m2: 2000 },
     private ids: string[] = ['m1', 'm2']
   ) {}
-  async listMessageIds(_label?: string, afterInternalDateMs?: number) { this.lastSince = afterInternalDateMs; return this.ids; }
+  async listMessageIds(_label: string, afterInternalDateMs?: number) {
+    this.lastSince = afterInternalDateMs;
+    return this.ids;
+  }
   async getMessageMetadata(id: string) { return { messageId: id, internalDate: this.internalDates[id] ?? 0, bodyText: 'screen answers' }; }
   async getAttachments(id: string, _allowExtensions?: string[], downloadBytes?: boolean) {
     if (this.failOn === id) throw new Error('download failed');

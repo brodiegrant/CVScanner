@@ -65,6 +65,34 @@ describe('GmailClient with mocked Gmail API', () => {
     expect(atts[0].data?.toString('utf8')).toBe('pdfbytes');
   });
 
+
+  it('listMessageIds uses the resolved Gmail label id in users.messages.list', async () => {
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels')
+      .query(true)
+      .once()
+      .reply(200, { labels: [{ id: 'Label_Resolved_42', name: 'Hiring Queue' }] });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/labels/Label_Resolved_42')
+      .query(true)
+      .once()
+      .reply(200, { id: 'Label_Resolved_42', name: 'Hiring Queue' });
+
+    nock('https://gmail.googleapis.com')
+      .get('/gmail/v1/users/me/messages')
+      .query((q) => q.labelIds === 'Label_Resolved_42' && q.q === 'after:1' && q.maxResults === '100')
+      .once()
+      .reply(200, { messages: [{ id: 'm42' }] });
+
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'token' });
+    const client = new GmailClient(auth);
+
+    await expect(client.listMessageIds('Hiring Queue', 1000)).resolves.toEqual(['m42']);
+    expect(nock.isDone()).toBe(true);
+  });
+
   it('resolves configured label name to id once and reuses cached id', async () => {
     nock('https://gmail.googleapis.com')
       .get('/gmail/v1/users/me/labels')
