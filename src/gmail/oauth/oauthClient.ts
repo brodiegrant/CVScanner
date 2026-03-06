@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { google } from 'googleapis';
 import { AppConfig } from '../../config/config.js';
 import { waitForOAuthCode } from './oauthServer.js';
-import { TokenStore } from '../../storage/tokenStore.js';
+import { TokenStore, TokenUpdate } from '../../storage/tokenStore.js';
 
 const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -56,16 +56,13 @@ export function createAuthorizedClient(config: AppConfig, tokenStore: TokenStore
   });
 
   oauth2Client.on('tokens', (tokens) => {
-    if (typeof tokens.refresh_token === 'string' && tokens.refresh_token.trim().length > 0) {
-      tokenStore.merge(accountEmail, { refreshToken: tokens.refresh_token });
-    }
+    const accessToken = tokens.access_token ?? undefined;
+    const refreshToken = typeof tokens.refresh_token === 'string' && tokens.refresh_token.trim().length > 0
+      ? tokens.refresh_token
+      : undefined;
+    const expiryDate = tokens.expiry_date ?? undefined;
 
-    if (tokens.access_token !== undefined || tokens.expiry_date !== undefined) {
-      tokenStore.merge(accountEmail, {
-        accessToken: tokens.access_token,
-        expiryDate: tokens.expiry_date
-      });
-    }
+    tokenStore.merge(accountEmail, { accessToken, refreshToken, expiryDate });
   });
 
   return oauth2Client;

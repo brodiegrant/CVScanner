@@ -63,8 +63,34 @@ export class SqliteTokenStore implements TokenStore {
 
     const access = encryptString(patch.accessToken, this.key);
     const shouldReplaceRefresh = typeof patch.refreshToken === 'string' && patch.refreshToken.length > 0;
-    const refresh = shouldReplaceRefresh ? encryptString(patch.refreshToken as string, this.key) : null;
     const now = new Date().toISOString();
+
+    if (!shouldReplaceRefresh) {
+      const result = this.db.prepare(`
+        UPDATE oauth_tokens
+        SET access_cipher=@accessCipher,
+            access_iv=@accessIv,
+            access_tag=@accessTag,
+            expiry_date=@expiryDate,
+            updated_at=@now
+        WHERE account_email=@accountEmail
+      `).run({
+        accountEmail,
+        accessCipher: access.ciphertext,
+        accessIv: access.iv,
+        accessTag: access.tag,
+        expiryDate: patch.expiryDate,
+        now
+      });
+
+      if (result.changes === 0) {
+        throw new Error('mergeUpsert requires refreshToken when creating a new token row');
+      }
+
+      return;
+    }
+
+    const refresh = encryptString(patch.refreshToken as string, this.key);
 
     this.db.prepare(`
       INSERT INTO oauth_tokens(account_email, access_cipher, access_iv, access_tag, refresh_cipher, refresh_iv, refresh_tag, expiry_date, created_at, updated_at)
@@ -83,9 +109,9 @@ export class SqliteTokenStore implements TokenStore {
       accessCipher: access.ciphertext,
       accessIv: access.iv,
       accessTag: access.tag,
-      refreshCipher: refresh?.ciphertext ?? null,
-      refreshIv: refresh?.iv ?? null,
-      refreshTag: refresh?.tag ?? null,
+      refreshCipher: refresh.ciphertext,
+      refreshIv: refresh.iv,
+      refreshTag: refresh.tag,
       expiryDate: patch.expiryDate,
       now
     });
