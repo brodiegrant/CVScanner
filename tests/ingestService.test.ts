@@ -109,6 +109,42 @@ describe('ingestOnce', () => {
     expect(second.processed_message_ids).toEqual(['m2']);
   });
 
+
+  it('does not mark message processed when onMessage fails', async () => {
+    const dbPath = path.join(os.tmpdir(), `cvscanner-ing-onmessage-${Date.now()}.db`);
+    const store = new SqliteCursorStore(dbPath);
+
+    const r1 = await ingestOnce({
+      accountEmail: 'a@b.com',
+      config,
+      gmailClient: new FakeGmail(undefined, { m1: 1000 }, ['m1']) as any,
+      cursorStore: store,
+      metrics: new NoopMetrics(),
+      onMessage: async () => {
+        throw new Error('cleaning failed');
+      }
+    });
+
+    expect(r1.counts.processed).toBe(0);
+    expect(r1.errors).toHaveLength(1);
+    expect(r1.processed_message_ids).toEqual([]);
+    expect(store.isProcessed('a@b.com', 'Process', 'm1', config.dedupeLookbackDays)).toBe(false);
+    expect(store.getCursor('a@b.com', 'Process')).toBeNull();
+
+    const r2 = await ingestOnce({
+      accountEmail: 'a@b.com',
+      config,
+      gmailClient: new FakeGmail(undefined, { m1: 1000 }, ['m1']) as any,
+      cursorStore: store,
+      metrics: new NoopMetrics(),
+      onMessage: async () => {}
+    });
+
+    expect(r2.counts.processed).toBe(1);
+    expect(r2.errors).toHaveLength(0);
+    expect(r2.processed_message_ids).toEqual(['m1']);
+  });
+
   it('does not advance cursor past failed message', async () => {
     const dbPath = path.join(os.tmpdir(), `cvscanner-ing2-${Date.now()}.db`);
     const store = new SqliteCursorStore(dbPath);
