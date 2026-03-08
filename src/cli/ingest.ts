@@ -9,6 +9,7 @@ import { ingestOnce } from '../gmail/ingest/ingestService.js';
 import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
+import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -43,6 +44,8 @@ async function main() {
         message_id: msg.messageId
       });
 
+      throwOnCleaningErrors(cleaned, msg.messageId);
+
       process.stdout.write(`${JSON.stringify(cleaned)}\n`);
     }
   });
@@ -60,6 +63,16 @@ export function getSummaryErrorMessage(summary: Pick<RunSummary, 'errors'>): str
 
   const firstError = summary.errors[0];
   return `ingest completed with ${summary.errors.length} error(s): ${firstError.kind}/${firstError.stage} ${firstError.message}`;
+}
+
+export function throwOnCleaningErrors(cleaned: Pick<CleaningOutputDto, 'errors'>, messageId: string): void {
+  if (cleaned.errors.length === 0) return;
+
+  const firstError = cleaned.errors[0];
+  throw new Error(
+    `cleaning failed for ${messageId} with ${cleaned.errors.length} error(s): ` +
+    `${firstError.kind}/${firstError.stage} ${firstError.message}`
+  );
 }
 
 const entryUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
