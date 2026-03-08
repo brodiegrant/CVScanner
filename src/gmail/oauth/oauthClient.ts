@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { google } from 'googleapis';
 import { AppConfig } from '../../config/config.js';
@@ -15,9 +15,30 @@ function randomBase64Url(bytes: number) {
     .replace(/=+$/g, '');
 }
 
-function openBrowser(url: string) {
-  const cmd = process.platform === 'darwin' ? `open "${url}"` : process.platform === 'win32' ? `start "" "${url}"` : `xdg-open "${url}"`;
-  exec(cmd);
+type BrowserLaunchResult =
+  | { ok: true }
+  | { ok: false; command: string; args: string[]; error: string };
+
+function openBrowser(url: string): Promise<BrowserLaunchResult> {
+  const [command, args] = process.platform === 'darwin'
+    ? ['open', [url]]
+    : process.platform === 'win32'
+      ? ['cmd', ['/c', 'start', '', url]]
+      : ['xdg-open', [url]];
+
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: 'ignore',
+      detached: true
+    });
+
+    child.once('spawn', () => resolve({ ok: true }));
+    child.once('error', (error) => {
+      resolve({ ok: false, command, args, error: error.message });
+    });
+
+    child.unref();
+  });
 }
 
 export async function connectAccount(config: AppConfig, tokenStore: TokenStore): Promise<{ accountEmail: string }> {
@@ -32,7 +53,14 @@ export async function connectAccount(config: AppConfig, tokenStore: TokenStore):
     state
   });
 
-  openBrowser(authUrl);
+  const browserLaunch = await openBrowser(authUrl);
+  if (!browserLaunch.ok) {
+    process.stderr.write(
+      `Could not automatically open browser (${browserLaunch.command} ${browserLaunch.args.join(' ')}): ${browserLaunch.error}\n` +
+      `Open this URL manually to continue: ${authUrl}\n`
+    );
+  }
+
   const callback = await waitForOAuthCode(config.oauth.redirectHost, config.oauth.redirectPort);
   if (!callback.state || callback.state !== state) {
     throw new Error('OAuth state mismatch. Please retry account connection.');
