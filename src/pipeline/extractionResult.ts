@@ -1,19 +1,13 @@
 import { z } from 'zod';
+import {
+  isAllowedTagValue,
+  MULTI_VALUE_CATEGORIES,
+  SINGLE_VALUE_CATEGORIES,
+  TAG_ALLOWLIST,
+  type TagCategory
+} from './ontology.js';
 
-const APPROVED_TAG_PREFIXES = [
-  'seniority',
-  'manage',
-  'tier',
-  'scope',
-  'tech',
-  'proto',
-  'design',
-  'signal',
-  'visa'
-] as const;
-
-const MULTI_VALUE_TAG_PREFIXES = new Set(['scope', 'signal']);
-const SINGLE_VALUE_TAG_PREFIXES = new Set(['visa']);
+const APPROVED_TAG_PREFIXES = Object.keys(TAG_ALLOWLIST) as [TagCategory, ...TagCategory[]];
 
 export const ApprovedTagPrefixSchema = z.enum(APPROVED_TAG_PREFIXES);
 
@@ -29,7 +23,8 @@ export const ExtractionTagSchema = z.string().trim().min(1).superRefine((value, 
   }
 
   const [prefix, suffix] = parts;
-  if (!ApprovedTagPrefixSchema.safeParse(prefix).success) {
+  const prefixResult = ApprovedTagPrefixSchema.safeParse(prefix);
+  if (!prefixResult.success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: `Tag category \"${prefix}\" is not in the approved vocabulary`
@@ -41,6 +36,15 @@ export const ExtractionTagSchema = z.string().trim().min(1).superRefine((value, 
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Tag values must be non-empty'
+    });
+    return;
+  }
+
+  const category = prefixResult.data;
+  if (!isAllowedTagValue(category, suffix)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Tag value \"${suffix}\" is not allowed for ${category}`
     });
   }
 });
@@ -86,6 +90,7 @@ export const ExtractionMetadataSchema = z.object({
 
 export const ExtractionResultSchema = z.object({
   tags: z.array(ExtractionTagSchema).transform(normalizeAndSortTags),
+  explanations: z.record(z.string().trim().min(1), z.string().trim().min(1)).default({}),
   location: ExtractionLocationSchema.nullable(),
   promptVersion: z.string().trim().min(1).optional(),
   modelName: z.string().trim().min(1).optional(),
@@ -98,9 +103,16 @@ export const ExtractionResultSchema = z.object({
     tagCounts.set(prefix, (tagCounts.get(prefix) ?? 0) + 1);
   }
 
-  for (const prefix of SINGLE_VALUE_TAG_PREFIXES) {
-    const count = tagCounts.get(prefix) ?? 0;
-    if (count > 1) {
+  for (const [prefix, count] of tagCounts.entries()) {
+    if (count > 1 && SINGLE_VALUE_CATEGORIES.has(prefix as TagCategory)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `At most one ${prefix}:* tag is allowed`,
+        path: ['tags']
+      });
+    }
+
+    if (count > 1 && !MULTI_VALUE_CATEGORIES.has(prefix as TagCategory) && !SINGLE_VALUE_CATEGORIES.has(prefix as TagCategory)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `At most one ${prefix}:* tag is allowed`,
@@ -109,16 +121,54 @@ export const ExtractionResultSchema = z.object({
     }
   }
 
-  for (const [prefix, count] of tagCounts.entries()) {
-    if (count > 1 && !MULTI_VALUE_TAG_PREFIXES.has(prefix) && !SINGLE_VALUE_TAG_PREFIXES.has(prefix)) {
+  const tierCount = tagCounts.get('tier') ?? 0;
+  const isRejectOutput = value.tags.includes('tier:reject');
+  if (!isRejectOutput && tierCount !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Exactly one tier:* tag is required for non-reject output',
+      path: ['tags']
+    });
+  }
+
+  for (const tag of value.tags) {
+    const explanation = value.explanations[tag];
+    if (!explanation || explanation.trim().length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `At most one ${prefix}:* tag is allowed`,
-        path: ['tags']
+        message: `Missing explanation for emitted tag \"${tag}\"`,
+        path: ['explanations', tag]
       });
     }
   }
 });
+
+const TagExplanationLineSchema = z.object({
+  tag: ExtractionTagSchema,
+  explanation: z.string().trim().min(1)
+});
+
+export function parseTagExplanationLines(lines: string[]): { tags: string[]; explanations: Record<string, string> } {
+  const trimmed = lines.map((line) => line.trim()).filter((line) => line.length > 0);
+  if (trimmed.length % 2 !== 0) {
+    throw new Error('Expected tag/explanation line pairs');
+  }
+
+  const tags: string[] = [];
+  const explanations: Record<string, string> = {};
+
+  for (let i = 0; i < trimmed.length; i += 2) {
+    const pair = TagExplanationLineSchema.parse({
+      tag: trimmed[i],
+      explanation: trimmed[i + 1]
+    });
+
+    tags.push(pair.tag);
+    explanations[pair.tag] = pair.explanation;
+  }
+
+  return { tags, explanations };
+}
 
 export type ApprovedTagPrefix = z.infer<typeof ApprovedTagPrefixSchema>;
 export type ExtractionLocation = z.infer<typeof ExtractionLocationSchema>;

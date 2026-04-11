@@ -1,58 +1,86 @@
 import { describe, expect, it } from 'vitest';
-import { parseExtractionResult, sortExtractionTags } from './extractionResult.js';
+import { parseExtractionResult, parseTagExplanationLines, sortExtractionTags } from './extractionResult.js';
 
 describe('ExtractionResultSchema', () => {
-  it('dedupes and sorts tags deterministically', () => {
+  it('accepts valid full outputs with explanations', () => {
     const result = parseExtractionResult({
-      tags: ['scope:global', 'signal:urgent', 'scope:global', 'seniority:mid', 'signal:strong'],
+      tags: ['scope:global', 'signal:urgent', 'seniority:mid', 'tier:t2', 'tech:backend', 'location:London, UK'],
+      explanations: {
+        'scope:global': 'Role influences global roadmap',
+        'signal:urgent': 'Posting asks for immediate availability',
+        'seniority:mid': 'Experience asks for 3-5 years',
+        'tier:t2': 'Maps to mid-level engineering roles',
+        'tech:backend': 'Primary responsibilities are API services',
+        'location:London, UK': 'Job ad lists London office'
+      },
       location: null,
       warnings: ['missing salary']
     });
 
     expect(result.tags).toEqual([
+      'location:London, UK',
       'scope:global',
       'seniority:mid',
-      'signal:strong',
-      'signal:urgent'
+      'signal:urgent',
+      'tech:backend',
+      'tier:t2'
     ]);
   });
 
-  it('rejects tags outside the approved vocabulary', () => {
-    expect(() => parseExtractionResult({
-      tags: ['location:london'],
-      location: null
-    })).toThrow(/approved vocabulary/);
+  it('rejects malformed line pairs', () => {
+    expect(() => parseTagExplanationLines(['tier:t1', 'good fit', 'seniority:mid'])).toThrow(/line pairs/);
   });
 
-  it('rejects multiple visa tags', () => {
+  it('rejects duplicate invalid single-value tags', () => {
     expect(() => parseExtractionResult({
-      tags: ['visa:required', 'visa:sponsored'],
+      tags: ['tier:t1', 'visa:required', 'visa:sponsored'],
+      explanations: {
+        'tier:t1': 'Entry-level role',
+        'visa:required': 'Needs work authorization',
+        'visa:sponsored': 'Mentions sponsorship'
+      },
       location: null
     })).toThrow(/At most one visa:\* tag is allowed/);
   });
 
-  it('accepts structured locations', () => {
-    const result = parseExtractionResult({
-      tags: ['tech:typescript', 'scope:remote'],
-      location: {
-        city: 'London',
-        country: 'United Kingdom',
-        latitude: 51.5072,
-        longitude: -0.1276,
-        location_name: 'London HQ'
+  it('requires exactly one tier tag for non-reject output', () => {
+    expect(() => parseExtractionResult({
+      tags: ['seniority:mid', 'tech:backend'],
+      explanations: {
+        'seniority:mid': '3-5 years requested',
+        'tech:backend': 'Role is backend focused'
       },
-      promptVersion: 'v1',
-      modelName: 'gpt-5.2'
+      location: null
+    })).toThrow(/Exactly one tier:\* tag is required/);
+  });
+
+  it('supports reject mode behavior', () => {
+    const result = parseExtractionResult({
+      tags: ['tier:reject', 'signal:low-confidence'],
+      explanations: {
+        'tier:reject': 'Posting is spam or unrelated to hiring',
+        'signal:low-confidence': 'Insufficient details in source text'
+      },
+      location: null
     });
 
-    expect(result.location?.city).toBe('London');
-    expect(result.location?.location_name).toBe('London HQ');
+    expect(result.tags).toContain('tier:reject');
+  });
+
+  it('requires explanation for each emitted tag', () => {
+    expect(() => parseExtractionResult({
+      tags: ['tier:t2', 'tech:backend'],
+      explanations: {
+        'tier:t2': 'Mid-level role'
+      },
+      location: null
+    })).toThrow(/Missing explanation/);
   });
 
   it('sortExtractionTags validates before sorting', () => {
-    expect(sortExtractionTags(['signal:alpha', 'signal:alpha', 'scope:emea'])).toEqual([
-      'scope:emea',
-      'signal:alpha'
+    expect(sortExtractionTags(['signal:urgent', 'signal:urgent', 'scope:remote'])).toEqual([
+      'scope:remote',
+      'signal:urgent'
     ]);
   });
 });
