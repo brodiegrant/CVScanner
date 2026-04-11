@@ -39,7 +39,11 @@ const schema = z.object({
   INGEST_INCLUDE_BODY: envBoolean(true),
   INTERNAL_REVIEW_API_ENABLED: envBoolean(false),
   INTERNAL_REVIEW_API_HOST: z.string().default('127.0.0.1'),
-  INTERNAL_REVIEW_API_PORT: z.coerce.number().int().positive().default(53901)
+  INTERNAL_REVIEW_API_PORT: z.coerce.number().int().positive().default(53901),
+  OPENAI_API_KEY: z.string().min(1),
+  LLM_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(3).default(2)
 });
 
 export type AppConfig = {
@@ -62,6 +66,12 @@ export type AppConfig = {
     enabled: boolean;
     host: string;
     port: number;
+  };
+  llm: {
+    apiKey: string;
+    model: string;
+    timeoutMs: number;
+    maxRetries: number;
   };
 };
 
@@ -97,6 +107,12 @@ export function loadConfig(): AppConfig {
       enabled: parsed.INTERNAL_REVIEW_API_ENABLED,
       host: parsed.INTERNAL_REVIEW_API_HOST,
       port: parsed.INTERNAL_REVIEW_API_PORT
+    },
+    llm: {
+      apiKey: parsed.OPENAI_API_KEY,
+      model: parsed.LLM_MODEL,
+      timeoutMs: parsed.LLM_TIMEOUT_MS,
+      maxRetries: parsed.LLM_MAX_RETRIES
     }
   };
 }
