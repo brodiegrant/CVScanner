@@ -59,6 +59,11 @@ Run summary counters:
 - `counts.attachments_found`: number of attachment files matching allowed extensions discovered during ingest.
 - `counts.attachments_downloaded`: total attachment bytes downloaded (0 in `--dry-run`).
 
+Run internal review API (disabled by default):
+```bash
+npm run review-api
+```
+
 
 ## Gmail label configuration
 - `--label` and `GMAIL_LABEL` accept either a Gmail label name (for example `Process`) or a Gmail label ID (for example `Label_123456789`).
@@ -74,3 +79,5 @@ Run summary counters:
 - Intake does not mutate Gmail state (no move/delete/label changes).
 - Intake stops on fatal error and does not advance cursor past failed work.
 - Logs and metrics intentionally exclude email bodies and attachment contents.
+- Internal review API is enabled only when `INTERNAL_REVIEW_API_ENABLED=true` and binds to `INTERNAL_REVIEW_API_HOST`/`INTERNAL_REVIEW_API_PORT` (default `127.0.0.1:53901`).
+- Endpoints: `GET /review/queue`, `GET /review/item/:id`, `POST /review/item/:id/resolve`.

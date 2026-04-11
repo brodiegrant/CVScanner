@@ -36,7 +36,10 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   METRICS_ENABLED: envBoolean(true),
   INGEST_BODY_MAX_CHARS: z.coerce.number().int().positive().default(12000),
-  INGEST_INCLUDE_BODY: envBoolean(true)
+  INGEST_INCLUDE_BODY: envBoolean(true),
+  INTERNAL_REVIEW_API_ENABLED: envBoolean(false),
+  INTERNAL_REVIEW_API_HOST: z.string().default('127.0.0.1'),
+  INTERNAL_REVIEW_API_PORT: z.coerce.number().int().positive().default(53901)
 });
 
 export type AppConfig = {
@@ -55,6 +58,11 @@ export type AppConfig = {
   metricsEnabled: boolean;
   ingestBodyMaxChars: number;
   ingestIncludeBody: boolean;
+  reviewApi: {
+    enabled: boolean;
+    host: string;
+    port: number;
+  };
 };
 
 export function loadConfig(): AppConfig {
@@ -84,6 +92,11 @@ export function loadConfig(): AppConfig {
     logLevel: parsed.LOG_LEVEL,
     metricsEnabled: parsed.METRICS_ENABLED,
     ingestBodyMaxChars: parsed.INGEST_BODY_MAX_CHARS,
-    ingestIncludeBody: parsed.INGEST_INCLUDE_BODY
+    ingestIncludeBody: parsed.INGEST_INCLUDE_BODY,
+    reviewApi: {
+      enabled: parsed.INTERNAL_REVIEW_API_ENABLED,
+      host: parsed.INTERNAL_REVIEW_API_HOST,
+      port: parsed.INTERNAL_REVIEW_API_PORT
+    }
   };
 }
