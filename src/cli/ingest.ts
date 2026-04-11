@@ -4,6 +4,7 @@ import { NoopMetrics } from '../observability/metrics.js';
 import { SqliteTokenStore } from '../storage/sqlite/sqliteTokenStore.js';
 import { SqliteCursorStore } from '../storage/sqlite/sqliteCursorStore.js';
 import { SqlitePipelineStore } from '../storage/sqlite/sqlitePipelineStore.js';
+import { SqliteExtractionStore } from '../storage/sqlite/sqliteExtractionStore.js';
 import { createAuthorizedClient } from '../gmail/oauth/oauthClient.js';
 import { GmailClient } from '../gmail/client/gmailClient.js';
 import { ingestOnce } from '../gmail/ingest/ingestService.js';
@@ -11,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
-import { sortExtractionTags } from '../pipeline/extractionResult.js';
+import { buildExtractionCandidate } from '../pipeline/extraction/buildExtractionCandidate.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -27,6 +28,7 @@ async function main() {
   const tokenStore = new SqliteTokenStore(config.sqlitePath, config.tokenEncKey);
   const cursorStore = new SqliteCursorStore(config.sqlitePath);
   const pipelineStore = new SqlitePipelineStore(config.sqlitePath);
+  const extractionStore = new SqliteExtractionStore(config.sqlitePath);
   const auth = createAuthorizedClient(config, tokenStore, account);
   const gmailClient = new GmailClient(auth);
   const metrics = config.metricsEnabled ? new JsonlMetricsSink(config.metricsJsonlPath) : new NoopMetrics();
@@ -40,72 +42,100 @@ async function main() {
     cursorStore,
     metrics,
     onMessage: async (msg) => {
-      const cleaned = runCleaningPipeline({
-        raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
-        body_text: msg.screeningSourceText,
-        provenance: msg.provenance,
-        message_id: msg.messageId
-      });
-
-      throwOnCleaningErrors(cleaned, msg.messageId);
-
-      const extraction = buildExtractionCandidate(cleaned);
-      const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
-
-      pipelineStore.upsertCandidateExtraction({
-        accountEmail: account,
-        messageId: msg.messageId,
-        contentHash: msg.contentHash ?? null,
-        status: extraction.status,
-        rawModelOutput,
-        parsedJson: extraction.parsedJson,
-        rejectionReason: extraction.rejectionReason,
-        modelName: extraction.modelName,
-        promptVersion: extraction.promptVersion
-      });
-
-      const matching = matchCandidate(msg, extraction.tags);
-      const syncResult = syncToVincere(msg, extraction.tags, matching);
-
-      pipelineStore.insertVincereSyncAttempt({
-        messageId: msg.messageId,
-        candidateIdentifier: matching.candidateIdentifier,
-        matchOutcome: matching.matchOutcome,
-        matchedCandidateId: matching.matchedCandidateId,
-        tagsProposed: JSON.stringify(extraction.tags),
-        tagsApplied: JSON.stringify(syncResult.tagsApplied),
-        resultStatus: syncResult.status,
-        errorText: syncResult.errorText
-      });
-
-      if (extraction.tags.length < 2) {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'low_tag_count',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+      try {
+        const cleaned = runCleaningPipeline({
+          raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
+          body_text: msg.screeningSourceText,
+          provenance: msg.provenance,
+          message_id: msg.messageId
         });
-      }
 
-      if (matching.matchOutcome === 'ambiguous') {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'ambiguous_match',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+        throwOnCleaningErrors(cleaned, msg.messageId);
+
+        const extraction = buildExtractionCandidate(cleaned);
+        const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
+
+        extractionStore.insertExtractionAttempt({
+          extractionKey: msg.messageId,
+          status: extraction.status,
+          rawModelOutput,
+          parsedTagExplanationJson: extraction.parsedTagExplanationJson,
+          rejectionReason: extraction.rejectionReason,
+          modelName: extraction.modelName,
+          promptVersion: extraction.promptVersion,
+          errorDetails: null
         });
-      }
 
-      if (syncResult.status === 'error') {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'sync_error',
+        pipelineStore.upsertCandidateExtraction({
+          accountEmail: account,
           messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          contentHash: msg.contentHash ?? null,
+          status: extraction.status,
+          rawModelOutput,
+          parsedJson: extraction.parsedTagExplanationJson,
+          rejectionReason: extraction.rejectionReason,
+          modelName: extraction.modelName,
+          promptVersion: extraction.promptVersion
         });
-      }
 
-      process.stdout.write(`${JSON.stringify(cleaned)}\n`);
+        const matching = matchCandidate(msg, extraction.tags);
+        const syncResult = syncToVincere(msg, extraction.tags, matching);
+
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier: matching.candidateIdentifier,
+          matchOutcome: matching.matchOutcome,
+          matchedCandidateId: matching.matchedCandidateId,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify(syncResult.tagsApplied),
+          resultStatus: syncResult.status,
+          errorText: syncResult.errorText
+        });
+
+        if (extraction.tags.length < 2) {
+          pipelineStore.upsertManualReviewQueue({
+            reason: 'low_tag_count',
+            messageId: msg.messageId,
+            candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+            payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          });
+        }
+
+        if (matching.matchOutcome === 'ambiguous') {
+          pipelineStore.upsertManualReviewQueue({
+            reason: 'ambiguous_match',
+            messageId: msg.messageId,
+            candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+            payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          });
+        }
+
+        if (syncResult.status === 'error') {
+          pipelineStore.upsertManualReviewQueue({
+            reason: 'sync_error',
+            messageId: msg.messageId,
+            candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+            payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          });
+        }
+
+        process.stdout.write(`${JSON.stringify(cleaned)}\n`);
+      } catch (err) {
+        extractionStore.insertExtractionAttempt({
+          extractionKey: msg.messageId,
+          status: 'error',
+          rawModelOutput: JSON.stringify({ error: true }),
+          parsedTagExplanationJson: null,
+          rejectionReason: null,
+          modelName: 'deterministic-cleaning-derived',
+          promptVersion: 'v1',
+          errorDetails: JSON.stringify({
+            message: err instanceof Error ? err.message : String(err),
+            messageId: msg.messageId
+          })
+        });
+        throw err;
+      }
     }
   });
 
@@ -115,39 +145,6 @@ async function main() {
   if (summaryErrorMessage) {
     throw new Error(summaryErrorMessage);
   }
-}
-
-function buildExtractionCandidate(cleaned: Pick<CleaningOutputDto, 'signals' | 'pii'>): {
-  status: 'parsed' | 'rejected';
-  rawModelOutput: Record<string, unknown>;
-  parsedJson: string;
-  rejectionReason: string | null;
-  modelName: string;
-  promptVersion: string;
-  tags: string[];
-} {
-  const derivedTags: string[] = [];
-
-  if (cleaned.signals.confidence >= 0.8) derivedTags.push('signal:strong');
-  if (cleaned.signals.confidence <= 0.4) derivedTags.push('signal:weak');
-  if (cleaned.signals.raw_length >= 1500) derivedTags.push('scope:global');
-  if (cleaned.pii.contains_email) derivedTags.push('signal:contact_info');
-
-  const tags = sortExtractionTags(derivedTags);
-  const rawModelOutput = {
-    tags,
-    explanations: tags.map((tag) => ({ tag, explanation: `Derived from deterministic cleaning signals for ${tag}.` }))
-  };
-
-  return {
-    status: tags.length > 0 ? 'parsed' : 'rejected',
-    rawModelOutput,
-    parsedJson: JSON.stringify(rawModelOutput),
-    rejectionReason: tags.length > 0 ? null : 'No extraction tags produced from cleaning signals',
-    modelName: 'deterministic-cleaning-derived',
-    promptVersion: 'v1',
-    tags
-  };
 }
 
 function matchCandidate(
