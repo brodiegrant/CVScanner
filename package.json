@@ -8,7 +8,8 @@
     "test": "vitest run",
     "connect": "tsx src/cli/connect.ts",
     "ingest": "tsx src/cli/ingest.ts",
-    "review-api": "tsx src/cli/reviewApi.ts"
+    "review-api": "tsx src/cli/reviewApi.ts",
+    "extract-tags": "tsx src/cli/extract-tags.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
