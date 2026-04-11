@@ -23,6 +23,9 @@ describe('environment boolean parsing', () => {
     expect(config.allowedAttachmentMimeTypes).toContain('application/pdf');
     expect(config.allowAttachmentArchives).toBe(false);
     expect(config.maxArchiveExpansionRatio).toBe(30);
+    expect(config.reviewApi.enabled).toBe(false);
+    expect(config.reviewApi.host).toBe('127.0.0.1');
+    expect(config.reviewApi.port).toBe(53901);
   });
 
   it('parses "false" to false', () => {

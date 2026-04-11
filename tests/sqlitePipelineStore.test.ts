@@ -51,5 +51,21 @@ describe('SqlitePipelineStore', () => {
 
     const review = db.prepare('SELECT * FROM manual_review_queue WHERE reason = ? AND message_id = ?').get('low_tag_count', 'm-1') as any;
     expect(review.candidate_hints).toContain('acct@example.com');
+
+    const queue = store.listManualReviewQueue();
+    expect(queue).toHaveLength(1);
+    expect(queue[0]?.messageId).toBe('m-1');
+
+    const extractionSnapshot = store.getLatestExtractionByMessageId('m-1');
+    expect(extractionSnapshot?.status).toBe('parsed');
+
+    const updatedRows = store.resolveManualReviewByMessageId('m-1', {
+      decision: 'approved',
+      notes: 'reviewed by test'
+    });
+    expect(updatedRows).toBe(1);
+
+    const resolved = store.getManualReviewByMessageId('m-1')[0];
+    expect(resolved?.payloadSnapshot).toContain('\"resolution\"');
   });
 });

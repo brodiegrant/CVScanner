@@ -25,3 +25,5 @@ export type {
   ManualReviewQueue,
   SyncResult
 } from './vincere/syncService.js';
+
+export { createInternalReviewApiApp, startInternalReviewApi } from './review/internalReviewApi.js';

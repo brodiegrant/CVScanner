@@ -32,6 +32,17 @@ export type ManualReviewQueueRow = {
   payloadSnapshot: string;
 };
 
+export type ManualReviewQueueEntry = ManualReviewQueueRow & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CandidateExtractionSnapshot = {
+  status: CandidateExtractionRow['status'];
+  parsedJson: string | null;
+  rawModelOutput: string;
+};
+
 export class SqlitePipelineStore {
   private readonly db: any;
 
@@ -176,4 +187,108 @@ export class SqlitePipelineStore {
         updated_at=excluded.updated_at
     `).run({ ...row, now });
   }
+
+  listManualReviewQueue(): ManualReviewQueueEntry[] {
+    return this.db.prepare(`
+      SELECT
+        reason AS reason,
+        message_id AS messageId,
+        candidate_hints AS candidateHints,
+        payload_snapshot AS payloadSnapshot,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM manual_review_queue
+      ORDER BY updated_at DESC
+    `).all() as ManualReviewQueueEntry[];
+  }
+
+  getManualReviewByMessageId(messageId: string): ManualReviewQueueEntry[] {
+    return this.db.prepare(`
+      SELECT
+        reason AS reason,
+        message_id AS messageId,
+        candidate_hints AS candidateHints,
+        payload_snapshot AS payloadSnapshot,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM manual_review_queue
+      WHERE message_id = ?
+      ORDER BY updated_at DESC
+    `).all(messageId) as ManualReviewQueueEntry[];
+  }
+
+  getLatestExtractionByMessageId(messageId: string): CandidateExtractionSnapshot | null {
+    return this.db.prepare(`
+      SELECT
+        status AS status,
+        parsed_json AS parsedJson,
+        raw_model_output AS rawModelOutput
+      FROM candidate_extractions
+      WHERE message_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(messageId) as CandidateExtractionSnapshot | undefined ?? null;
+  }
+
+  resolveManualReviewByMessageId(
+    messageId: string,
+    resolution: { decision: 'approved' | 'updated'; notes?: string; updatedPayload?: Record<string, unknown> | null }
+  ): number {
+    const rows = this.db.prepare(`
+      SELECT
+        reason AS reason,
+        message_id AS messageId,
+        candidate_hints AS candidateHints,
+        payload_snapshot AS payloadSnapshot
+      FROM manual_review_queue
+      WHERE message_id = ?
+    `).all(messageId) as ManualReviewQueueRow[];
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const now = new Date().toISOString();
+    const updateStmt = this.db.prepare(`
+      UPDATE manual_review_queue
+      SET payload_snapshot = @payloadSnapshot, updated_at = @now
+      WHERE reason = @reason AND message_id = @messageId
+    `);
+
+    let updatedRows = 0;
+    for (const row of rows) {
+      const snapshot = parseJsonObject(row.payloadSnapshot);
+      const nextSnapshot = {
+        ...snapshot,
+        resolution: {
+          decision: resolution.decision,
+          notes: resolution.notes ?? null,
+          updatedPayload: resolution.updatedPayload ?? null,
+          resolvedAt: now
+        }
+      };
+      const result = updateStmt.run({
+        reason: row.reason,
+        messageId: row.messageId,
+        payloadSnapshot: JSON.stringify(nextSnapshot),
+        now
+      });
+      updatedRows += Number(result.changes ?? 0);
+    }
+
+    return updatedRows;
+  }
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through
+  }
+
+  return { rawSnapshot: value };
 }
