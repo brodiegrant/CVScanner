@@ -12,6 +12,7 @@ import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
 import { sortExtractionTags } from '../pipeline/extractionResult.js';
+import { ExtractionParseError, parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -50,7 +51,7 @@ async function main() {
       throwOnCleaningErrors(cleaned, msg.messageId);
 
       const extraction = buildExtractionCandidate(cleaned);
-      const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
+      const rawModelOutput = extraction.rawModelOutput;
 
       pipelineStore.upsertCandidateExtraction({
         accountEmail: account,
@@ -118,36 +119,96 @@ async function main() {
 }
 
 function buildExtractionCandidate(cleaned: Pick<CleaningOutputDto, 'signals' | 'pii'>): {
-  status: 'parsed' | 'rejected';
-  rawModelOutput: Record<string, unknown>;
-  parsedJson: string;
+  status: 'parsed' | 'rejected' | 'error';
+  rawModelOutput: string;
+  parsedJson: string | null;
   rejectionReason: string | null;
   modelName: string;
   promptVersion: string;
   tags: string[];
 } {
-  const derivedTags: string[] = [];
+  const rawModelOutputLines: string[] = [];
 
-  if (cleaned.signals.confidence >= 0.8) derivedTags.push('signal:strong');
-  if (cleaned.signals.confidence <= 0.4) derivedTags.push('signal:weak');
-  if (cleaned.signals.raw_length >= 1500) derivedTags.push('scope:global');
-  if (cleaned.pii.contains_email) derivedTags.push('signal:contact_info');
+  if (cleaned.signals.confidence >= 0.8) {
+    rawModelOutputLines.push('signal:strong');
+    rawModelOutputLines.push('High confidence was derived from deterministic cleaning signals.');
+  }
 
-  const tags = sortExtractionTags(derivedTags);
-  const rawModelOutput = {
-    tags,
-    explanations: tags.map((tag) => ({ tag, explanation: `Derived from deterministic cleaning signals for ${tag}.` }))
-  };
+  if (cleaned.signals.confidence <= 0.4) {
+    rawModelOutputLines.push('signal:weak');
+    rawModelOutputLines.push('Low confidence was derived from deterministic cleaning signals.');
+  }
 
-  return {
-    status: tags.length > 0 ? 'parsed' : 'rejected',
-    rawModelOutput,
-    parsedJson: JSON.stringify(rawModelOutput),
-    rejectionReason: tags.length > 0 ? null : 'No extraction tags produced from cleaning signals',
-    modelName: 'deterministic-cleaning-derived',
-    promptVersion: 'v1',
-    tags
-  };
+  if (cleaned.signals.raw_length >= 1500) {
+    rawModelOutputLines.push('scope:global');
+    rawModelOutputLines.push('Long-form resume content suggests broad/global role scope.');
+  }
+
+  if (cleaned.pii.contains_email) {
+    rawModelOutputLines.push('signal:medium');
+    rawModelOutputLines.push('Contact signal was detected in candidate-provided details.');
+  }
+
+  if (rawModelOutputLines.length === 0) {
+    return {
+      status: 'rejected',
+      rawModelOutput: 'reject\nNo extraction tags produced from cleaning signals',
+      parsedJson: null,
+      rejectionReason: 'No extraction tags produced from cleaning signals',
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags: []
+    };
+  }
+
+  rawModelOutputLines.push('tier:t2');
+  rawModelOutputLines.push('Deterministic extraction produced enough non-reject signal to classify as tier t2.');
+  const rawModelOutput = rawModelOutputLines.join('\n');
+
+  try {
+    const parsed = parseTagExplanations(rawModelOutput);
+    if (parsed.status === 'rejected') {
+      return {
+        status: 'rejected',
+        rawModelOutput,
+        parsedJson: null,
+        rejectionReason: parsed.rejection_reason,
+        modelName: 'deterministic-cleaning-derived',
+        promptVersion: 'v2-tag-explanation-canonical',
+        tags: []
+      };
+    }
+
+    const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
+    const parsedJson = JSON.stringify({
+      tags,
+      explanations: Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]))
+    });
+
+    return {
+      status: 'parsed',
+      rawModelOutput,
+      parsedJson,
+      rejectionReason: null,
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags
+    };
+  } catch (error) {
+    const reason = error instanceof ExtractionParseError
+      ? `Extraction parse failed (${error.code})`
+      : 'Extraction parse failed';
+
+    return {
+      status: 'error',
+      rawModelOutput,
+      parsedJson: null,
+      rejectionReason: reason,
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags: []
+    };
+  }
 }
 
 function matchCandidate(

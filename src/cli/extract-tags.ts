@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { stdin } from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { parseExtractionResult, parseTagExplanationLines, sortExtractionTags } from '../pipeline/extractionResult.js';
+import { parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
+import { sortExtractionTags } from '../pipeline/extractionResult.js';
 
 export interface ExtractTagsCliOptions {
   file?: string;
@@ -91,41 +92,24 @@ export async function runExtractionService(input: string): Promise<string> {
 }
 
 export function normalizeParsedOutput(rawModelOutput: string): NormalizedOutput {
-  const lines = rawModelOutput
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const parsed = parseTagExplanations(rawModelOutput);
 
-  if (lines.length === 0) {
-    throw new Error('Model output must contain at least one non-empty line');
-  }
-
-  if (lines[0].toLowerCase() === 'reject') {
-    if (lines.length !== 2) {
-      throw new Error('Reject mode only allows 2 non-empty lines');
-    }
-
+  if (parsed.status === 'rejected') {
     return {
       status: 'rejected',
       tags: [],
       explanations: {},
-      rejection_reason: lines[1]
+      rejection_reason: parsed.rejection_reason
     };
   }
 
-  const { tags: parsedTags, explanations } = parseTagExplanationLines(lines);
-  const tags = sortExtractionTags(parsedTags);
-
-  const validated = parseExtractionResult({
-    tags,
-    explanations,
-    location: null
-  });
+  const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
+  const explanations = Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]));
 
   return {
     status: 'accepted',
-    tags: validated.tags,
-    explanations: validated.explanations
+    tags,
+    explanations
   };
 }
 
