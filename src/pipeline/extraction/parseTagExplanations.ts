@@ -115,6 +115,7 @@ export function parseTagExplanations(rawText: string): ParsedExtractionOutput {
   try {
     parseExtractionResult({
       tags: tagExplanations.map((entry) => entry.tag),
+      explanations: Object.fromEntries(tagExplanations.map((entry) => [entry.tag, entry.explanation])),
       location: null
     });
   } catch (error) {

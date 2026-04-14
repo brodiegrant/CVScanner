@@ -1,4 +1,4 @@
-export const EXTRACTION_PROMPT_VERSION = 'semiverif-v1';
+export const EXTRACTION_PROMPT_VERSION = 'semiverif-v2';
 
 export const MAX_CV_TEXT_LENGTH = 60_000;
 
@@ -26,9 +26,10 @@ Rules:
 2) Categories with single cardinality (at most one): seniority, manage, tier, visa, location.
 3) Categories that can have multiple values: scope, tech, proto, design, signal.
 4) For non-reject outputs, include exactly one tier:* tag.
-5) If the CV is irrelevant, spammy, or cannot be classified safely, use reject mode.
+5) If the CV is irrelevant, spammy, malformed, or cannot be classified safely, use reject mode.
 6) Never invent ontology values outside the approved list.
 7) Explanations must be brief, evidence-based, and tied to CV text.
+8) Canonical contract must be followed exactly; any deviation is invalid output.
 
 Output format (strict):
 - Accepted mode:
@@ -41,6 +42,9 @@ Output format (strict):
 - Reject mode:
   line 1: reject
   line 2: <single-sentence rejection reason>
+
+Accepted mode must contain only alternating <tag> then <explanation> lines, and the total non-empty line count must be even.
+Reject mode must contain exactly one "reject" line and one reason line only.
 
 Do not output JSON. Do not output markdown. Do not output headings.
 
