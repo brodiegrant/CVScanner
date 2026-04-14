@@ -51,33 +51,98 @@ async function main() {
       throwOnCleaningErrors(cleaned, msg.messageId);
 
       const extraction = buildExtractionCandidate(cleaned);
-      const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
+      const rawModelOutput = extraction.rawModelOutput;
 
       pipelineStore.upsertCandidateExtraction({
         accountEmail: account,
         messageId: msg.messageId,
         contentHash: msg.contentHash ?? null,
         status: extraction.status,
-        rawModelOutput,
+        rawModelOutput: extraction.rawModelOutput,
         parsedJson: extraction.parsedJson,
         rejectionReason: extraction.rejectionReason,
         modelName: extraction.modelName,
         promptVersion: extraction.promptVersion
       });
 
-      const matching = matchCandidate(msg, extraction.tags);
-      const syncResult = syncToVincere(msg, extraction.tags, matching);
+      try {
+        throwOnCleaningErrors(cleaned, msg.messageId);
+        extraction = buildExtractionCandidate(cleaned);
+        const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
 
-      pipelineStore.insertVincereSyncAttempt({
-        messageId: msg.messageId,
-        candidateIdentifier: matching.candidateIdentifier,
-        matchOutcome: matching.matchOutcome,
-        matchedCandidateId: matching.matchedCandidateId,
-        tagsProposed: JSON.stringify(extraction.tags),
-        tagsApplied: JSON.stringify(syncResult.tagsApplied),
-        resultStatus: syncResult.status,
-        errorText: syncResult.errorText
-      });
+        pipelineStore.upsertCandidateExtraction({
+          accountEmail: account,
+          messageId: msg.messageId,
+          contentHash: msg.contentHash ?? null,
+          status: extraction.status,
+          rawModelOutput,
+          parsedJson: extraction.parsedJson,
+          rejectionReason: extraction.rejectionReason,
+          modelName: extraction.modelName,
+          promptVersion: extraction.promptVersion
+        });
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        pipelineStore.upsertCandidateExtraction({
+          accountEmail: account,
+          messageId: msg.messageId,
+          contentHash: msg.contentHash ?? null,
+          status: 'error',
+          rawModelOutput: JSON.stringify({ error: errorText }),
+          parsedJson: null,
+          rejectionReason: errorText,
+          modelName: 'deterministic-cleaning-derived',
+          promptVersion: 'v1'
+        });
+        pipelineStore.upsertManualReviewQueue({
+          reason: 'extraction_error',
+          messageId: msg.messageId,
+          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+          payloadSnapshot: JSON.stringify({ cleaned, error: errorText })
+        });
+        return;
+      }
+
+      let matching:
+        | ReturnType<typeof matchCandidate>
+        | undefined;
+      let syncResult:
+        | ReturnType<typeof syncToVincere>
+        | undefined;
+      try {
+        matching = matchCandidate(msg, extraction.tags);
+        syncResult = syncToVincere(msg, extraction.tags, matching);
+
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier: matching.candidateIdentifier,
+          matchOutcome: matching.matchOutcome,
+          matchedCandidateId: matching.matchedCandidateId,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify(syncResult.tagsApplied),
+          resultStatus: syncResult.status,
+          errorText: syncResult.errorText
+        });
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier: msg.from ?? `message:${msg.messageId}`,
+          matchOutcome: 'no_match',
+          matchedCandidateId: null,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify([]),
+          resultStatus: 'error',
+          errorText
+        });
+        pipelineStore.upsertManualReviewQueue({
+          reason: 'sync_error',
+          messageId: msg.messageId,
+          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+          payloadSnapshot: JSON.stringify({ extraction, error: errorText })
+        });
+        return;
+      }
 
       const reviewDecision = evaluateReviewPolicy({
         vincereTags: extraction.tags,
@@ -116,36 +181,96 @@ async function main() {
 }
 
 function buildExtractionCandidate(cleaned: Pick<CleaningOutputDto, 'signals' | 'pii'>): {
-  status: 'parsed' | 'rejected';
-  rawModelOutput: Record<string, unknown>;
-  parsedJson: string;
+  status: 'parsed' | 'rejected' | 'error';
+  rawModelOutput: string;
+  parsedJson: string | null;
   rejectionReason: string | null;
   modelName: string;
   promptVersion: string;
   tags: string[];
 } {
-  const derivedTags: string[] = [];
+  const rawModelOutputLines: string[] = [];
 
-  if (cleaned.signals.confidence >= 0.8) derivedTags.push('signal:strong');
-  if (cleaned.signals.confidence <= 0.4) derivedTags.push('signal:weak');
-  if (cleaned.signals.raw_length >= 1500) derivedTags.push('scope:global');
-  if (cleaned.pii.contains_email) derivedTags.push('signal:contact_info');
+  if (cleaned.signals.confidence >= 0.8) {
+    rawModelOutputLines.push('signal:strong');
+    rawModelOutputLines.push('High confidence was derived from deterministic cleaning signals.');
+  }
 
-  const tags = sortExtractionTags(derivedTags);
-  const rawModelOutput = {
-    tags,
-    explanations: tags.map((tag) => ({ tag, explanation: `Derived from deterministic cleaning signals for ${tag}.` }))
-  };
+  if (cleaned.signals.confidence <= 0.4) {
+    rawModelOutputLines.push('signal:weak');
+    rawModelOutputLines.push('Low confidence was derived from deterministic cleaning signals.');
+  }
 
-  return {
-    status: tags.length > 0 ? 'parsed' : 'rejected',
-    rawModelOutput,
-    parsedJson: JSON.stringify(rawModelOutput),
-    rejectionReason: tags.length > 0 ? null : 'No extraction tags produced from cleaning signals',
-    modelName: 'deterministic-cleaning-derived',
-    promptVersion: 'v1',
-    tags
-  };
+  if (cleaned.signals.raw_length >= 1500) {
+    rawModelOutputLines.push('scope:global');
+    rawModelOutputLines.push('Long-form resume content suggests broad/global role scope.');
+  }
+
+  if (cleaned.pii.contains_email) {
+    rawModelOutputLines.push('signal:medium');
+    rawModelOutputLines.push('Contact signal was detected in candidate-provided details.');
+  }
+
+  if (rawModelOutputLines.length === 0) {
+    return {
+      status: 'rejected',
+      rawModelOutput: 'reject\nNo extraction tags produced from cleaning signals',
+      parsedJson: null,
+      rejectionReason: 'No extraction tags produced from cleaning signals',
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags: []
+    };
+  }
+
+  rawModelOutputLines.push('tier:t2');
+  rawModelOutputLines.push('Deterministic extraction produced enough non-reject signal to classify as tier t2.');
+  const rawModelOutput = rawModelOutputLines.join('\n');
+
+  try {
+    const parsed = parseTagExplanations(rawModelOutput);
+    if (parsed.status === 'rejected') {
+      return {
+        status: 'rejected',
+        rawModelOutput,
+        parsedJson: null,
+        rejectionReason: parsed.rejection_reason,
+        modelName: 'deterministic-cleaning-derived',
+        promptVersion: 'v2-tag-explanation-canonical',
+        tags: []
+      };
+    }
+
+    const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
+    const parsedJson = JSON.stringify({
+      tags,
+      explanations: Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]))
+    });
+
+    return {
+      status: 'parsed',
+      rawModelOutput,
+      parsedJson,
+      rejectionReason: null,
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags
+    };
+  } catch (error) {
+    const reason = error instanceof ExtractionParseError
+      ? `Extraction parse failed (${error.code})`
+      : 'Extraction parse failed';
+
+    return {
+      status: 'error',
+      rawModelOutput,
+      parsedJson: null,
+      rejectionReason: reason,
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags: []
+    };
+  }
 }
 
 function matchCandidate(
