@@ -26,7 +26,7 @@ export type VincereSyncAttemptRow = {
 };
 
 export type ManualReviewQueueRow = {
-  reason: 'low_tag_count' | 'ambiguous_match' | 'sync_error';
+  reason: 'low_tag_count' | 'ambiguous_match' | 'sync_error' | 'extraction_error';
   messageId: string;
   candidateHints: string;
   payloadSnapshot: string;
