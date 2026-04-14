@@ -27,3 +27,6 @@ export type {
 } from './vincere/syncService.js';
 
 export { createInternalReviewApiApp, startInternalReviewApi } from './review/internalReviewApi.js';
+
+export { mapTagsToExpertiseLinks, assertExpertiseMappingConfig, EXPERTISE_TAG_MAP } from './vincere/expertiseMapping.js';
+export type { ExpertiseLinkPayloadItem, ExpertiseMappingResult } from './vincere/expertiseMapping.js';
