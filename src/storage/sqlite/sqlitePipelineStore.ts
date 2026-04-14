@@ -23,6 +23,14 @@ export type VincereSyncAttemptRow = {
   tagsApplied: string;
   resultStatus: 'success' | 'error' | 'skipped';
   errorText: string | null;
+  candidateLookupOutcome?: string | null;
+  candidateUpsertOutcome?: string | null;
+  expertiseLinkPayload?: string | null;
+  expertiseLinkResult?: string | null;
+  documentUploadAttempted?: boolean;
+  documentUploadResult?: string | null;
+  documentUploadErrorText?: string | null;
+  resolvedUploadCandidateId?: string | null;
 };
 
 export type ManualReviewQueueRow = {
@@ -75,6 +83,14 @@ export class SqlitePipelineStore {
         tags_applied TEXT NOT NULL,
         result_status TEXT NOT NULL,
         error_text TEXT,
+        candidate_lookup_outcome TEXT,
+        candidate_upsert_outcome TEXT,
+        expertise_link_payload TEXT,
+        expertise_link_result TEXT,
+        document_upload_attempted INTEGER NOT NULL DEFAULT 0,
+        document_upload_result TEXT,
+        document_upload_error_text TEXT,
+        resolved_upload_candidate_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -90,6 +106,7 @@ export class SqlitePipelineStore {
         PRIMARY KEY (reason, message_id)
       );
     `);
+    this.ensureVincereSyncAttemptColumns();
   }
 
   upsertCandidateExtraction(row: CandidateExtractionRow): void {
@@ -145,6 +162,14 @@ export class SqlitePipelineStore {
         tags_applied,
         result_status,
         error_text,
+        candidate_lookup_outcome,
+        candidate_upsert_outcome,
+        expertise_link_payload,
+        expertise_link_result,
+        document_upload_attempted,
+        document_upload_result,
+        document_upload_error_text,
+        resolved_upload_candidate_id,
         created_at,
         updated_at
       )
@@ -157,10 +182,86 @@ export class SqlitePipelineStore {
         @tagsApplied,
         @resultStatus,
         @errorText,
+        @candidateLookupOutcome,
+        @candidateUpsertOutcome,
+        @expertiseLinkPayload,
+        @expertiseLinkResult,
+        @documentUploadAttempted,
+        @documentUploadResult,
+        @documentUploadErrorText,
+        @resolvedUploadCandidateId,
         @now,
         @now
       )
-    `).run({ ...row, now });
+    `).run({
+      ...row,
+      candidateLookupOutcome: row.candidateLookupOutcome ?? null,
+      candidateUpsertOutcome: row.candidateUpsertOutcome ?? null,
+      expertiseLinkPayload: row.expertiseLinkPayload ?? null,
+      expertiseLinkResult: row.expertiseLinkResult ?? null,
+      documentUploadAttempted: row.documentUploadAttempted ? 1 : 0,
+      documentUploadResult: row.documentUploadResult ?? null,
+      documentUploadErrorText: row.documentUploadErrorText ?? null,
+      resolvedUploadCandidateId: row.resolvedUploadCandidateId ?? null,
+      now
+    });
+  }
+
+  private ensureVincereSyncAttemptColumns(): void {
+    const existingColumns = new Set(
+      (this.db.prepare(`PRAGMA table_info(vincere_sync_attempts)`).all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    );
+
+    const missingColumns = [
+      {
+        name: 'candidate_lookup_outcome',
+        definition: 'TEXT'
+      },
+      {
+        name: 'candidate_upsert_outcome',
+        definition: 'TEXT'
+      },
+      {
+        name: 'expertise_link_payload',
+        definition: 'TEXT'
+      },
+      {
+        name: 'expertise_link_result',
+        definition: 'TEXT'
+      },
+      {
+        name: 'document_upload_attempted',
+        definition: 'INTEGER NOT NULL DEFAULT 0'
+      },
+      {
+        name: 'document_upload_result',
+        definition: 'TEXT'
+      },
+      {
+        name: 'document_upload_error_text',
+        definition: 'TEXT'
+      },
+      {
+        name: 'resolved_upload_candidate_id',
+        definition: 'TEXT'
+      }
+    ].filter((column) => !existingColumns.has(column.name));
+
+    if (missingColumns.length === 0) {
+      return;
+    }
+
+    const alterTable = this.db.transaction((columns: Array<{ name: string; definition: string }>) => {
+      for (const column of columns) {
+        this.db.exec(`
+          ALTER TABLE vincere_sync_attempts
+          ADD COLUMN ${column.name} ${column.definition}
+        `);
+      }
+    });
+
+    alterTable(missingColumns);
   }
 
   upsertManualReviewQueue(row: ManualReviewQueueRow): void {
