@@ -38,7 +38,7 @@ export function createInternalReviewApiApp(pipelineStore: SqlitePipelineStore) {
       .filter((item) => getResolutionFromSnapshot(item.payloadSnapshot) === null)
       .map((item) => ({
         id: item.messageId,
-        reason: item.reason,
+        reason: normalizeManualReviewReason(item.reason),
         candidateHints: safeJson(item.candidateHints),
         createdAt: item.createdAt,
         updatedAt: item.updatedAt
@@ -62,7 +62,7 @@ export function createInternalReviewApiApp(pipelineStore: SqlitePipelineStore) {
 
     res.json({
       id: messageId,
-      reasons: records.map((item) => item.reason),
+      reasons: records.map((item) => normalizeManualReviewReason(item.reason)),
       createdAt: records.map((item) => item.createdAt).sort()[0],
       updatedAt: records.map((item) => item.updatedAt).sort().reverse()[0],
       candidateHints: records.map((item) => safeJson(item.candidateHints)),
@@ -136,4 +136,17 @@ function getResolutionFromSnapshot(snapshot: string): unknown {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeManualReviewReason(reason: string): string {
+  switch (reason) {
+    case 'low_tag_count':
+      return 'LOW_NON_LOCATION_TAG_COUNT';
+    case 'ambiguous_match':
+      return 'AMBIGUOUS_CANDIDATE_MATCH';
+    case 'sync_error':
+      return 'SYNC_ERROR';
+    default:
+      return reason;
+  }
 }

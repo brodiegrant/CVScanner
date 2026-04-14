@@ -36,12 +36,11 @@ describe('review policy', () => {
     expect(decision.reasonCode).toBe(ManualReviewReasonCode.AmbiguousCandidateMatch);
   });
 
-  it('optionally routes rejected outputs to manual review', () => {
+  it('always routes rejected outputs to manual review', () => {
     const decision = evaluateReviewPolicy({
       vincereTags: ['tech:typescript', 'seniority:mid'],
       hasAmbiguousCandidateMatch: false,
-      isRejectedOutput: true,
-      routeRejectedOutputToReview: true
+      isRejectedOutput: true
     });
 
     expect(decision.routeToManualReview).toBe(true);
@@ -51,16 +50,17 @@ describe('review policy', () => {
     });
   });
 
-  it('does not route rejected outputs when optional routing is disabled', () => {
+  it('prioritizes rejected output reason regardless of other review triggers', () => {
     const decision = evaluateReviewPolicy({
-      vincereTags: ['tech:typescript', 'seniority:mid'],
-      hasAmbiguousCandidateMatch: false,
-      isRejectedOutput: true,
-      routeRejectedOutputToReview: false
+      vincereTags: ['location:london'],
+      hasAmbiguousCandidateMatch: true,
+      isRejectedOutput: true
     });
 
-    expect(decision.routeToManualReview).toBe(false);
-    expect(decision.reasonCode).toBeNull();
-    expect(decision.manualReviewQueueRecord).toBeNull();
+    expect(decision.routeToManualReview).toBe(true);
+    expect(decision.reasonCode).toBe(ManualReviewReasonCode.RejectedOutput);
+    expect(decision.manualReviewQueueRecord).toEqual({
+      reasonCode: ManualReviewReasonCode.RejectedOutput
+    });
   });
 });
