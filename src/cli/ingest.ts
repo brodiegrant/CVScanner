@@ -65,19 +65,84 @@ async function main() {
         promptVersion: extraction.promptVersion
       });
 
-      const matching = matchCandidate(msg, extraction.tags);
-      const syncResult = syncToVincere(msg, extraction.tags, matching);
+      try {
+        throwOnCleaningErrors(cleaned, msg.messageId);
+        extraction = buildExtractionCandidate(cleaned);
+        const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
 
-      pipelineStore.insertVincereSyncAttempt({
-        messageId: msg.messageId,
-        candidateIdentifier: matching.candidateIdentifier,
-        matchOutcome: matching.matchOutcome,
-        matchedCandidateId: matching.matchedCandidateId,
-        tagsProposed: JSON.stringify(extraction.tags),
-        tagsApplied: JSON.stringify(syncResult.tagsApplied),
-        resultStatus: syncResult.status,
-        errorText: syncResult.errorText
-      });
+        pipelineStore.upsertCandidateExtraction({
+          accountEmail: account,
+          messageId: msg.messageId,
+          contentHash: msg.contentHash ?? null,
+          status: extraction.status,
+          rawModelOutput,
+          parsedJson: extraction.parsedJson,
+          rejectionReason: extraction.rejectionReason,
+          modelName: extraction.modelName,
+          promptVersion: extraction.promptVersion
+        });
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        pipelineStore.upsertCandidateExtraction({
+          accountEmail: account,
+          messageId: msg.messageId,
+          contentHash: msg.contentHash ?? null,
+          status: 'error',
+          rawModelOutput: JSON.stringify({ error: errorText }),
+          parsedJson: null,
+          rejectionReason: errorText,
+          modelName: 'deterministic-cleaning-derived',
+          promptVersion: 'v1'
+        });
+        pipelineStore.upsertManualReviewQueue({
+          reason: 'extraction_error',
+          messageId: msg.messageId,
+          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+          payloadSnapshot: JSON.stringify({ cleaned, error: errorText })
+        });
+        return;
+      }
+
+      let matching:
+        | ReturnType<typeof matchCandidate>
+        | undefined;
+      let syncResult:
+        | ReturnType<typeof syncToVincere>
+        | undefined;
+      try {
+        matching = matchCandidate(msg, extraction.tags);
+        syncResult = syncToVincere(msg, extraction.tags, matching);
+
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier: matching.candidateIdentifier,
+          matchOutcome: matching.matchOutcome,
+          matchedCandidateId: matching.matchedCandidateId,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify(syncResult.tagsApplied),
+          resultStatus: syncResult.status,
+          errorText: syncResult.errorText
+        });
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier: msg.from ?? `message:${msg.messageId}`,
+          matchOutcome: 'no_match',
+          matchedCandidateId: null,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify([]),
+          resultStatus: 'error',
+          errorText
+        });
+        pipelineStore.upsertManualReviewQueue({
+          reason: 'sync_error',
+          messageId: msg.messageId,
+          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+          payloadSnapshot: JSON.stringify({ extraction, error: errorText })
+        });
+        return;
+      }
 
       if (extraction.tags.length < 2) {
         pipelineStore.upsertManualReviewQueue({
