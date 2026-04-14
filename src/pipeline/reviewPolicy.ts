@@ -10,7 +10,6 @@ export interface ReviewPolicyInput {
   vincereTags: string[];
   hasAmbiguousCandidateMatch: boolean;
   isRejectedOutput: boolean;
-  routeRejectedOutputToReview?: boolean;
 }
 
 export interface ManualReviewQueueRecord {
@@ -38,12 +37,12 @@ export function evaluateReviewPolicy(input: ReviewPolicyInput): ReviewPolicyDeci
 
   let reasonCode: ManualReviewReasonCode | null = null;
 
-  if (input.hasAmbiguousCandidateMatch) {
+  if (input.isRejectedOutput) {
+    reasonCode = ManualReviewReasonCode.RejectedOutput;
+  } else if (input.hasAmbiguousCandidateMatch) {
     reasonCode = ManualReviewReasonCode.AmbiguousCandidateMatch;
   } else if (nonLocationTagCount <= 1) {
     reasonCode = ManualReviewReasonCode.LowNonLocationTagCount;
-  } else if (input.isRejectedOutput && input.routeRejectedOutputToReview === true) {
-    reasonCode = ManualReviewReasonCode.RejectedOutput;
   }
 
   return {

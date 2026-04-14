@@ -12,7 +12,7 @@ import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
 import { sortExtractionTags } from '../pipeline/extractionResult.js';
-import { ExtractionParseError, parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
+import { evaluateReviewPolicy } from '../pipeline/reviewPolicy.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -144,27 +144,24 @@ async function main() {
         return;
       }
 
-      if (extraction.tags.length < 2) {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'low_tag_count',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
-        });
-      }
+      const reviewDecision = evaluateReviewPolicy({
+        vincereTags: extraction.tags,
+        hasAmbiguousCandidateMatch: matching.matchOutcome === 'ambiguous',
+        isRejectedOutput: extraction.status === 'rejected'
+      });
 
-      if (matching.matchOutcome === 'ambiguous') {
+      if (reviewDecision.manualReviewQueueRecord !== null) {
         pipelineStore.upsertManualReviewQueue({
-          reason: 'ambiguous_match',
+          reason: reviewDecision.manualReviewQueueRecord.reasonCode,
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult, reviewDecision })
         });
       }
 
       if (syncResult.status === 'error') {
         pipelineStore.upsertManualReviewQueue({
-          reason: 'sync_error',
+          reason: 'SYNC_ERROR',
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
           payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
