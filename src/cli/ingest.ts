@@ -11,7 +11,10 @@ import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
-import { sortExtractionTags } from '../pipeline/extractionResult.js';
+import { parseExtractionResult, sortExtractionTags } from '../pipeline/extractionResult.js';
+import { requestLlmRawText } from '../pipeline/extraction/llmClient.js';
+import { parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
+import { buildExtractionPrompt, EXTRACTION_PROMPT_VERSION } from '../pipeline/extraction/prompt.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -49,15 +52,25 @@ async function main() {
 
       throwOnCleaningErrors(cleaned, msg.messageId);
 
-      const extraction = buildExtractionCandidate(cleaned);
-      const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
+      const extraction = await extractCandidateTags({
+        cleanText: cleaned.clean_text,
+        messageId: msg.messageId,
+        contentHash: msg.contentHash ?? undefined,
+        modelName: config.llm.model,
+        llmConfig: {
+          apiKey: config.llm.apiKey,
+          model: config.llm.model,
+          timeoutMs: config.llm.timeoutMs,
+          retries: config.llm.maxRetries
+        }
+      });
 
       pipelineStore.upsertCandidateExtraction({
         accountEmail: account,
         messageId: msg.messageId,
         contentHash: msg.contentHash ?? null,
         status: extraction.status,
-        rawModelOutput,
+        rawModelOutput: extraction.rawModelOutput,
         parsedJson: extraction.parsedJson,
         rejectionReason: extraction.rejectionReason,
         modelName: extraction.modelName,
@@ -117,37 +130,85 @@ async function main() {
   }
 }
 
-function buildExtractionCandidate(cleaned: Pick<CleaningOutputDto, 'signals' | 'pii'>): {
-  status: 'parsed' | 'rejected';
-  rawModelOutput: Record<string, unknown>;
+async function extractCandidateTags(input: {
+  cleanText: string;
+  messageId: string;
+  contentHash?: string;
+  modelName: string;
+  llmConfig: {
+    apiKey: string;
+    model: string;
+    timeoutMs: number;
+    retries: number;
+  };
+}): Promise<{
+  status: 'parsed' | 'rejected' | 'error';
+  rawModelOutput: string;
   parsedJson: string;
   rejectionReason: string | null;
   modelName: string;
   promptVersion: string;
   tags: string[];
-} {
-  const derivedTags: string[] = [];
+}> {
+  const promptVersion = EXTRACTION_PROMPT_VERSION;
 
-  if (cleaned.signals.confidence >= 0.8) derivedTags.push('signal:strong');
-  if (cleaned.signals.confidence <= 0.4) derivedTags.push('signal:weak');
-  if (cleaned.signals.raw_length >= 1500) derivedTags.push('scope:global');
-  if (cleaned.pii.contains_email) derivedTags.push('signal:contact_info');
+  try {
+    const prompt = buildExtractionPrompt(input.cleanText);
+    const rawModelOutput = await requestLlmRawText(input.llmConfig, {
+      resumeText: prompt,
+      messageId: input.messageId,
+      contentHash: input.contentHash
+    });
+    const parsed = parseTagExplanations(rawModelOutput);
 
-  const tags = sortExtractionTags(derivedTags);
-  const rawModelOutput = {
-    tags,
-    explanations: tags.map((tag) => ({ tag, explanation: `Derived from deterministic cleaning signals for ${tag}.` }))
-  };
+    if (parsed.status === 'rejected') {
+      const parsedJson = JSON.stringify(parsed);
+      return {
+        status: 'rejected',
+        rawModelOutput,
+        parsedJson,
+        rejectionReason: parsed.rejection_reason,
+        modelName: input.modelName,
+        promptVersion,
+        tags: []
+      };
+    }
 
-  return {
-    status: tags.length > 0 ? 'parsed' : 'rejected',
-    rawModelOutput,
-    parsedJson: JSON.stringify(rawModelOutput),
-    rejectionReason: tags.length > 0 ? null : 'No extraction tags produced from cleaning signals',
-    modelName: 'deterministic-cleaning-derived',
-    promptVersion: 'v1',
-    tags
-  };
+    const explanations = Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]));
+    const validationResult = parseExtractionResult({
+      tags: parsed.tag_explanations.map((entry) => entry.tag),
+      explanations,
+      location: null
+    });
+    const sortedTags = sortExtractionTags(validationResult.tags);
+    const parsedJson = JSON.stringify({
+      status: 'accepted',
+      tags: sortedTags,
+      explanations
+    });
+
+    return {
+      status: 'parsed',
+      rawModelOutput,
+      parsedJson,
+      rejectionReason: null,
+      modelName: input.modelName,
+      promptVersion,
+      tags: sortedTags
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      rawModelOutput: '',
+      parsedJson: JSON.stringify({
+        error: error instanceof Error ? error.message : String(error)
+      }),
+      rejectionReason: error instanceof Error ? error.message : String(error),
+      modelName: input.modelName,
+      promptVersion,
+      tags: []
+    };
+  }
 }
 
 function matchCandidate(

@@ -113,8 +113,10 @@ export function parseTagExplanations(rawText: string): ParsedExtractionOutput {
   }
 
   try {
+    const explanations = Object.fromEntries(tagExplanations.map((entry) => [entry.tag, entry.explanation]));
     parseExtractionResult({
       tags: tagExplanations.map((entry) => entry.tag),
+      explanations,
       location: null
     });
   } catch (error) {
