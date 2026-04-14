@@ -3,13 +3,16 @@ import { ExtractionParseError, parseTagExplanations } from './parseTagExplanatio
 
 describe('parseTagExplanations', () => {
   it('parses accepted tag + explanation pairs', () => {
-    const result = parseTagExplanations(`scope:remote\nRole can be done remotely\ntech:typescript\nRequires TS experience`);
+    const result = parseTagExplanations(
+      `tier:t2\nCandidate appears viable\nscope:remote\nRole can be done remotely\ntech:backend\nRequires backend experience`
+    );
 
     expect(result).toEqual({
       status: 'accepted',
       tag_explanations: [
+        { tag: 'tier:t2', explanation: 'Candidate appears viable' },
         { tag: 'scope:remote', explanation: 'Role can be done remotely' },
-        { tag: 'tech:typescript', explanation: 'Requires TS experience' }
+        { tag: 'tech:backend', explanation: 'Requires backend experience' }
       ]
     });
   });
@@ -25,7 +28,7 @@ describe('parseTagExplanations', () => {
   });
 
   it('rejects uneven line counts in accepted mode', () => {
-    expect(() => parseTagExplanations('scope:remote\nOnly one pair\ntech:typescript')).toThrowError(
+    expect(() => parseTagExplanations('scope:remote\nOnly one pair\ntech:backend')).toThrowError(
       new ExtractionParseError(
         'UNEVEN_LINE_COUNT',
         'Accepted mode requires an even number of non-empty lines (tag + explanation pairs)'
@@ -51,7 +54,7 @@ describe('parseTagExplanations', () => {
   });
 
   it('reject mode must only contain two non-empty lines', () => {
-    expect(() => parseTagExplanations('reject\nNot enough detail\ntech:typescript\nextra')).toThrowError(
+    expect(() => parseTagExplanations('reject\nNot enough detail\ntech:backend\nextra')).toThrowError(
       /Reject mode only allows 2 non-empty lines/
     );
   });

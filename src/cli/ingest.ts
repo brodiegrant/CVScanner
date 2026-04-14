@@ -11,10 +11,8 @@ import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
-import { parseExtractionResult, sortExtractionTags } from '../pipeline/extractionResult.js';
-import { requestLlmRawText } from '../pipeline/extraction/llmClient.js';
-import { parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
-import { buildExtractionPrompt, EXTRACTION_PROMPT_VERSION } from '../pipeline/extraction/prompt.js';
+import { sortExtractionTags } from '../pipeline/extractionResult.js';
+import { ExtractionParseError, parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -52,18 +50,8 @@ async function main() {
 
       throwOnCleaningErrors(cleaned, msg.messageId);
 
-      const extraction = await extractCandidateTags({
-        cleanText: cleaned.clean_text,
-        messageId: msg.messageId,
-        contentHash: msg.contentHash ?? undefined,
-        modelName: config.llm.model,
-        llmConfig: {
-          apiKey: config.llm.apiKey,
-          model: config.llm.model,
-          timeoutMs: config.llm.timeoutMs,
-          retries: config.llm.maxRetries
-        }
-      });
+      const extraction = buildExtractionCandidate(cleaned);
+      const rawModelOutput = extraction.rawModelOutput;
 
       pipelineStore.upsertCandidateExtraction({
         accountEmail: account,
@@ -130,61 +118,71 @@ async function main() {
   }
 }
 
-async function extractCandidateTags(input: {
-  cleanText: string;
-  messageId: string;
-  contentHash?: string;
-  modelName: string;
-  llmConfig: {
-    apiKey: string;
-    model: string;
-    timeoutMs: number;
-    retries: number;
-  };
-}): Promise<{
+function buildExtractionCandidate(cleaned: Pick<CleaningOutputDto, 'signals' | 'pii'>): {
   status: 'parsed' | 'rejected' | 'error';
   rawModelOutput: string;
-  parsedJson: string;
+  parsedJson: string | null;
   rejectionReason: string | null;
   modelName: string;
   promptVersion: string;
   tags: string[];
-}> {
-  const promptVersion = EXTRACTION_PROMPT_VERSION;
+} {
+  const rawModelOutputLines: string[] = [];
+
+  if (cleaned.signals.confidence >= 0.8) {
+    rawModelOutputLines.push('signal:strong');
+    rawModelOutputLines.push('High confidence was derived from deterministic cleaning signals.');
+  }
+
+  if (cleaned.signals.confidence <= 0.4) {
+    rawModelOutputLines.push('signal:weak');
+    rawModelOutputLines.push('Low confidence was derived from deterministic cleaning signals.');
+  }
+
+  if (cleaned.signals.raw_length >= 1500) {
+    rawModelOutputLines.push('scope:global');
+    rawModelOutputLines.push('Long-form resume content suggests broad/global role scope.');
+  }
+
+  if (cleaned.pii.contains_email) {
+    rawModelOutputLines.push('signal:medium');
+    rawModelOutputLines.push('Contact signal was detected in candidate-provided details.');
+  }
+
+  if (rawModelOutputLines.length === 0) {
+    return {
+      status: 'rejected',
+      rawModelOutput: 'reject\nNo extraction tags produced from cleaning signals',
+      parsedJson: null,
+      rejectionReason: 'No extraction tags produced from cleaning signals',
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags: []
+    };
+  }
+
+  rawModelOutputLines.push('tier:t2');
+  rawModelOutputLines.push('Deterministic extraction produced enough non-reject signal to classify as tier t2.');
+  const rawModelOutput = rawModelOutputLines.join('\n');
 
   try {
-    const prompt = buildExtractionPrompt(input.cleanText);
-    const rawModelOutput = await requestLlmRawText(input.llmConfig, {
-      resumeText: prompt,
-      messageId: input.messageId,
-      contentHash: input.contentHash
-    });
     const parsed = parseTagExplanations(rawModelOutput);
-
     if (parsed.status === 'rejected') {
-      const parsedJson = JSON.stringify(parsed);
       return {
         status: 'rejected',
         rawModelOutput,
-        parsedJson,
+        parsedJson: null,
         rejectionReason: parsed.rejection_reason,
-        modelName: input.modelName,
-        promptVersion,
+        modelName: 'deterministic-cleaning-derived',
+        promptVersion: 'v2-tag-explanation-canonical',
         tags: []
       };
     }
 
-    const explanations = Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]));
-    const validationResult = parseExtractionResult({
-      tags: parsed.tag_explanations.map((entry) => entry.tag),
-      explanations,
-      location: null
-    });
-    const sortedTags = sortExtractionTags(validationResult.tags);
+    const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
     const parsedJson = JSON.stringify({
-      status: 'accepted',
-      tags: sortedTags,
-      explanations
+      tags,
+      explanations: Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]))
     });
 
     return {
@@ -192,20 +190,22 @@ async function extractCandidateTags(input: {
       rawModelOutput,
       parsedJson,
       rejectionReason: null,
-      modelName: input.modelName,
-      promptVersion,
-      tags: sortedTags
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
+      tags
     };
   } catch (error) {
+    const reason = error instanceof ExtractionParseError
+      ? `Extraction parse failed (${error.code})`
+      : 'Extraction parse failed';
+
     return {
       status: 'error',
-      rawModelOutput: '',
-      parsedJson: JSON.stringify({
-        error: error instanceof Error ? error.message : String(error)
-      }),
-      rejectionReason: error instanceof Error ? error.message : String(error),
-      modelName: input.modelName,
-      promptVersion,
+      rawModelOutput,
+      parsedJson: null,
+      rejectionReason: reason,
+      modelName: 'deterministic-cleaning-derived',
+      promptVersion: 'v2-tag-explanation-canonical',
       tags: []
     };
   }
