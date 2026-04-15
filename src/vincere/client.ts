@@ -1,3 +1,4 @@
+import type { ExpertiseLinkPayloadItem } from './expertiseMapping.js';
 export type VincereClientConfig = {
   apiBaseUrl: string;
   apiKey: string;
@@ -111,6 +112,23 @@ export class VincereClient {
     await this.patch<void>(`/api/candidate/${encodeURIComponent(candidateId)}/functional-expertise`, {
       candidateId,
       functionalExpertiseIds: deduped
+    });
+  }
+
+
+  async updateExpertiseLinks(candidateId: string, links: ExpertiseLinkPayloadItem[]): Promise<void> {
+    const normalizedLinks = links
+      .map((entry) => ({
+        func_id: entry.func_id,
+        sub_func_ids: [...new Set(entry.sub_func_ids)].sort((left, right) => left - right)
+      }))
+      .filter((entry) => entry.func_id !== null || entry.sub_func_ids.length > 0);
+
+    if (normalizedLinks.length === 0) return;
+
+    await this.post<void>(`/api/candidate/${encodeURIComponent(candidateId)}/expertise`, {
+      candidateId,
+      expertise: normalizedLinks
     });
   }
 

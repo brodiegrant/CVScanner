@@ -1,4 +1,5 @@
 import { createLogger, redact } from '../observability/logger.js';
+import { mapTagsToExpertiseLinks } from './expertiseMapping.js';
 import { VincereClient } from './client.js';
 import { CandidateIdentity, CandidateMatchInput, matchCandidates } from './matching.js';
 
@@ -14,6 +15,7 @@ export type VincereSyncAttachment = {
 export type VincereSyncCandidatePayload = CandidateMatchInput & {
   id?: string;
   functionalExpertiseIds?: string[];
+  expertiseTags?: string[];
   [key: string]: unknown;
 };
 
@@ -44,6 +46,25 @@ export async function syncCandidateToVincere(opts: {
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
 }): Promise<SyncResult> {
   const logger = createLogger(opts.logLevel ?? 'info');
+
+
+  const mappedExpertise = mapTagsToExpertiseLinks(opts.payload.expertiseTags ?? []);
+  if (mappedExpertise.manualReviewReason) {
+    await opts.reviewQueue.enqueue({
+      sourceId: opts.sourceId,
+      payload: opts.payload,
+      matches: [],
+      createdAt: new Date().toISOString()
+    });
+
+    logger.warn('vincere.manual_review.quarantined_unmapped_expertise_tags', {
+      sourceId: opts.sourceId,
+      unknownTags: mappedExpertise.unknownTags,
+      reason: mappedExpertise.manualReviewReason
+    });
+
+    return { disposition: 'manual_review', reason: mappedExpertise.manualReviewReason };
+  }
 
   let emailLookupCandidateId: string | null = null;
   const email = opts.payload.email?.trim();
@@ -169,9 +190,11 @@ async function applyPostSyncCandidateActions(opts: {
   vincereClient: VincereClient;
   dryRun?: boolean;
 }): Promise<void> {
+  const mappedExpertise = mapTagsToExpertiseLinks(opts.payload.expertiseTags ?? []);
   const functionalExpertiseIds = opts.payload.functionalExpertiseIds ?? [];
+
   if (functionalExpertiseIds.length > 0) {
-    opts.logger.info('vincere.write.update_functional_expertise', {
+    opts.logger.info('vincere.write.update_functional_expertise_ids', {
       sourceId: opts.sourceId,
       candidateId: opts.candidateId,
       dryRun: Boolean(opts.dryRun),
@@ -180,6 +203,19 @@ async function applyPostSyncCandidateActions(opts: {
 
     if (!opts.dryRun) {
       await opts.vincereClient.updateFunctionalExpertiseLinks(opts.candidateId, functionalExpertiseIds);
+    }
+  }
+
+  if (mappedExpertise.items.length > 0) {
+    opts.logger.info('vincere.write.update_expertise_links', {
+      sourceId: opts.sourceId,
+      candidateId: opts.candidateId,
+      dryRun: Boolean(opts.dryRun),
+      expertiseLinkCount: mappedExpertise.items.length
+    });
+
+    if (!opts.dryRun) {
+      await opts.vincereClient.updateExpertiseLinks(opts.candidateId, mappedExpertise.items);
     }
   }
 

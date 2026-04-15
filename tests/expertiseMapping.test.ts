@@ -6,7 +6,7 @@ import {
 } from '../src/vincere/expertiseMapping.js';
 
 describe('expertise mapping config', () => {
-  it('validates at startup', () => {
+  it('validates required mappings at startup', () => {
     expect(() => assertExpertiseMappingConfig()).not.toThrow();
   });
 });
@@ -14,17 +14,17 @@ describe('expertise mapping config', () => {
 describe('mapTagsToExpertiseLinks', () => {
   it('aggregates multiple tags into grouped expertise items with stable ordering', () => {
     const result = mapTagsToExpertiseLinks([
-      'tech:backend',
-      'tech:frontend',
-      'design:ux',
-      'tech:fullstack',
-      'tech:backend'
+      'tech:python',
+      'tech:uvm',
+      'design:cpu',
+      'tech:systemverilog',
+      'tech:uvm'
     ]);
 
     expect(result).toEqual<ExpertiseMappingResult>({
       items: [
-        { func_id: 100, sub_func_ids: [1001, 1002] },
-        { func_id: 103, sub_func_ids: [1033] }
+        { func_id: 200, sub_func_ids: [2001, 2002, 2005] },
+        { func_id: 202, sub_func_ids: [2201] }
       ],
       unknownTags: [],
       manualReviewReason: null
@@ -32,20 +32,20 @@ describe('mapTagsToExpertiseLinks', () => {
   });
 
   it('returns deterministic unknown tags and manual review reason for unmapped input', () => {
-    const result = mapTagsToExpertiseLinks(['tech:ai', 'signal:strong', 'unknown:value', 'signal:strong']);
+    const result = mapTagsToExpertiseLinks(['tech:python', 'scope:global', 'unknown:value', 'scope:global']);
 
     expect(result).toEqual<ExpertiseMappingResult>({
-      items: [{ func_id: 101, sub_func_ids: [1013] }],
-      unknownTags: ['signal:strong', 'unknown:value'],
-      manualReviewReason: 'UNMAPPED_EXPERTISE_TAGS:signal:strong,unknown:value'
+      items: [{ func_id: 200, sub_func_ids: [2005] }],
+      unknownTags: ['scope:global', 'unknown:value'],
+      manualReviewReason: 'UNMAPPED_EXPERTISE_TAGS:scope:global,unknown:value'
     });
   });
 
   it('normalizes case and whitespace before mapping', () => {
-    const result = mapTagsToExpertiseLinks([' Tech:ML ', 'tech:data']);
+    const result = mapTagsToExpertiseLinks([' Tech:SystemVerilog ', 'tech:python']);
 
     expect(result).toEqual<ExpertiseMappingResult>({
-      items: [{ func_id: 101, sub_func_ids: [1011, 1012] }],
+      items: [{ func_id: 200, sub_func_ids: [2001, 2005] }],
       unknownTags: [],
       manualReviewReason: null
     });
