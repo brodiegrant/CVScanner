@@ -115,20 +115,13 @@ export class VincereClient {
     });
   }
 
+  async updateSubFunctionalExpertiseLinks(candidateId: string, expertiseIds: string[]): Promise<void> {
+    const deduped = [...new Set(expertiseIds.map((id) => id.trim()).filter(Boolean))];
+    if (deduped.length === 0) return;
 
-  async updateExpertiseLinks(candidateId: string, links: ExpertiseLinkPayloadItem[]): Promise<void> {
-    const normalizedLinks = links
-      .map((entry) => ({
-        func_id: entry.func_id,
-        sub_func_ids: [...new Set(entry.sub_func_ids)].sort((left, right) => left - right)
-      }))
-      .filter((entry) => entry.func_id !== null || entry.sub_func_ids.length > 0);
-
-    if (normalizedLinks.length === 0) return;
-
-    await this.post<void>(`/api/candidate/${encodeURIComponent(candidateId)}/expertise`, {
+    await this.patch<void>(`/api/candidate/${encodeURIComponent(candidateId)}/sub-functional-expertise`, {
       candidateId,
-      expertise: normalizedLinks
+      subFunctionalExpertiseIds: deduped
     });
   }
 
