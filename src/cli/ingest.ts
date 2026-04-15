@@ -11,10 +11,11 @@ import { pathToFileURL } from 'node:url';
 import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
-import { parseExtractionResult, sortExtractionTags } from '../pipeline/extractionResult.js';
-import { evaluateReviewPolicy } from '../pipeline/reviewPolicy.js';
-import { parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
 import { requestLlmRawText } from '../pipeline/extraction/llmClient.js';
+import { ExtractionParseError, parseTagExplanations } from '../pipeline/extraction/parseTagExplanations.js';
+import { sortExtractionTags } from '../pipeline/extractionResult.js';
+import { evaluateReviewPolicy } from '../pipeline/reviewPolicy.js';
+import { mapTagsToExpertiseLinks } from '../vincere/expertiseMapping.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -43,15 +44,34 @@ async function main() {
     cursorStore,
     metrics,
     onMessage: async (msg) => {
-      const cleaned = runCleaningPipeline({
-        raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
-        body_text: msg.screeningSourceText,
-        provenance: msg.provenance,
-        message_id: msg.messageId
-      });
+      try {
+        // 1) Run cleaning pipeline.
+        const cleaned = runCleaningPipeline({
+          raw_text: msg.screeningSourceText ?? msg.snippet ?? msg.subject ?? '',
+          body_text: msg.screeningSourceText,
+          provenance: msg.provenance,
+          message_id: msg.messageId
+        });
 
-      let extraction:
-        | {
+        throwOnCleaningErrors(cleaned, msg.messageId);
+
+        // 2) Run LLM extraction.
+        const rawModelOutput = await requestLlmRawText(
+          {
+            apiKey: config.llm.apiKey,
+            model: config.llm.model,
+            timeoutMs: config.llm.timeoutMs,
+            retries: config.llm.maxRetries
+          },
+          {
+            resumeText: cleaned.clean_text,
+            messageId: msg.messageId,
+            contentHash: msg.contentHash
+          }
+        );
+
+        // 3) Parse/validate tags.
+        let extraction: {
           status: 'parsed' | 'rejected' | 'error';
           rawModelOutput: string;
           parsedJson: string | null;
@@ -60,19 +80,50 @@ async function main() {
           promptVersion: string;
           tags: string[];
         };
-      try {
-        throwOnCleaningErrors(cleaned, msg.messageId);
-        extraction = await buildExtractionCandidate({
-          cleaned,
-          messageId: msg.messageId,
-          contentHash: msg.contentHash
-        }, {
-          apiKey: config.llm.apiKey,
-          model: config.llm.model,
-          timeoutMs: config.llm.timeoutMs,
-          retries: config.llm.maxRetries
-        });
 
+        try {
+          const parsed = parseTagExplanations(rawModelOutput);
+          if (parsed.status === 'rejected') {
+            extraction = {
+              status: 'rejected',
+              rawModelOutput,
+              parsedJson: null,
+              rejectionReason: parsed.rejection_reason,
+              modelName: config.llm.model,
+              promptVersion: 'semiverif-v2',
+              tags: []
+            };
+          } else {
+            const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
+            extraction = {
+              status: 'parsed',
+              rawModelOutput,
+              parsedJson: JSON.stringify({
+                tags,
+                explanations: Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]))
+              }),
+              rejectionReason: null,
+              modelName: config.llm.model,
+              promptVersion: 'semiverif-v2',
+              tags
+            };
+          }
+        } catch (error) {
+          const reason = error instanceof ExtractionParseError
+            ? `Extraction parse failed (${error.code})`
+            : 'Extraction parse failed';
+          extraction = {
+            status: 'error',
+            rawModelOutput,
+            parsedJson: null,
+            rejectionReason: reason,
+            modelName: config.llm.model,
+            promptVersion: 'semiverif-v2',
+            tags: []
+          };
+        }
+
+        // 4) Persist extraction row.
         pipelineStore.upsertCandidateExtraction({
           accountEmail: account,
           messageId: msg.messageId,
@@ -84,6 +135,52 @@ async function main() {
           modelName: extraction.modelName,
           promptVersion: extraction.promptVersion
         });
+
+        // 5) Run candidate lookup/upsert + expertise link + doc upload.
+        const candidateIdentifier = (msg.from ?? '').trim() || `message:${msg.messageId}`;
+        const expertiseMapping = mapTagsToExpertiseLinks(extraction.tags);
+        const hasUploadableDocument = msg.attachments.some((attachment) => !attachment.rejected && Boolean(attachment.data?.length));
+
+        pipelineStore.insertVincereSyncAttempt({
+          messageId: msg.messageId,
+          candidateIdentifier,
+          matchOutcome: 'no_match',
+          matchedCandidateId: null,
+          tagsProposed: JSON.stringify(extraction.tags),
+          tagsApplied: JSON.stringify([]),
+          resultStatus: 'skipped',
+          errorText: null,
+          candidateLookupOutcome: 'skipped_cli_not_configured',
+          candidateUpsertOutcome: 'skipped_cli_not_configured',
+          expertiseLinkPayload: JSON.stringify(expertiseMapping.items),
+          expertiseLinkResult: expertiseMapping.manualReviewReason ? 'manual_review_required' : 'skipped_cli_not_configured',
+          documentUploadAttempted: hasUploadableDocument,
+          documentUploadResult: hasUploadableDocument ? 'skipped_cli_not_configured' : 'not_attempted',
+          documentUploadErrorText: null,
+          resolvedUploadCandidateId: null
+        });
+
+        // 6) Persist sync attempt and optional manual-review queue item.
+        const reviewDecision = evaluateReviewPolicy({
+          vincereTags: extraction.tags,
+          hasAmbiguousCandidateMatch: false,
+          isRejectedOutput: extraction.status === 'rejected'
+        });
+
+        const requiresManualReview = extraction.status !== 'parsed'
+          || expertiseMapping.manualReviewReason !== null
+          || reviewDecision.manualReviewQueueRecord !== null;
+
+        if (requiresManualReview) {
+          pipelineStore.upsertManualReviewQueue({
+            reason: extraction.status === 'error' ? 'extraction_error' : 'sync_error',
+            messageId: msg.messageId,
+            candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
+            payloadSnapshot: JSON.stringify({ extraction, reviewDecision, expertiseMapping })
+          });
+        }
+
+        process.stdout.write(`${JSON.stringify(cleaned)}\n`);
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
         pipelineStore.upsertCandidateExtraction({
@@ -95,98 +192,15 @@ async function main() {
           parsedJson: null,
           rejectionReason: errorText,
           modelName: config.llm.model,
-          promptVersion: 'v2-tag-explanation-canonical'
+          promptVersion: 'semiverif-v2'
         });
         pipelineStore.upsertManualReviewQueue({
           reason: 'extraction_error',
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ cleaned, error: errorText })
-        });
-        return;
-      }
-
-      if (extraction.status === 'error') {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'extraction_error',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ cleaned, extraction })
-        });
-        return;
-      }
-
-      let matching:
-        | ReturnType<typeof matchCandidate>
-        | undefined;
-      let syncResult:
-        | ReturnType<typeof syncToVincere>
-        | undefined;
-      try {
-        matching = matchCandidate(msg, extraction.tags);
-        syncResult = syncToVincere(msg, extraction.tags, matching);
-
-        pipelineStore.insertVincereSyncAttempt({
-          messageId: msg.messageId,
-          candidateIdentifier: matching.candidateIdentifier,
-          matchOutcome: matching.matchOutcome,
-          matchedCandidateId: matching.matchedCandidateId,
-          tagsProposed: JSON.stringify(extraction.tags),
-          tagsApplied: JSON.stringify(syncResult.tagsApplied),
-          resultStatus: syncResult.status,
-          errorText: syncResult.errorText
-        });
-      } catch (error) {
-        const errorText = error instanceof Error ? error.message : String(error);
-        pipelineStore.insertVincereSyncAttempt({
-          messageId: msg.messageId,
-          candidateIdentifier: msg.from ?? `message:${msg.messageId}`,
-          matchOutcome: 'no_match',
-          matchedCandidateId: null,
-          tagsProposed: JSON.stringify(extraction.tags),
-          tagsApplied: JSON.stringify([]),
-          resultStatus: 'error',
-          errorText
-        });
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'sync_error',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, error: errorText })
-        });
-        return;
-      }
-
-      const reviewDecision = evaluateReviewPolicy({
-        vincereTags: extraction.tags,
-        hasAmbiguousCandidateMatch: matching.matchOutcome === 'ambiguous',
-        isRejectedOutput: extraction.status === 'rejected'
-      });
-
-      if (reviewDecision.manualReviewQueueRecord !== null) {
-        const reasonMap: Record<string, 'low_tag_count' | 'ambiguous_match' | 'extraction_error'> = {
-          LOW_NON_LOCATION_TAG_COUNT: 'low_tag_count',
-          AMBIGUOUS_CANDIDATE_MATCH: 'ambiguous_match',
-          REJECTED_OUTPUT: 'extraction_error'
-        };
-        pipelineStore.upsertManualReviewQueue({
-          reason: reasonMap[reviewDecision.manualReviewQueueRecord.reasonCode] ?? 'extraction_error',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult, reviewDecision })
+          payloadSnapshot: JSON.stringify({ error: errorText })
         });
       }
-
-      if (syncResult.status === 'error') {
-        pipelineStore.upsertManualReviewQueue({
-          reason: 'sync_error',
-          messageId: msg.messageId,
-          candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
-        });
-      }
-
-      process.stdout.write(`${JSON.stringify(cleaned)}\n`);
     }
   });
 
@@ -196,137 +210,6 @@ async function main() {
   if (summaryErrorMessage) {
     throw new Error(summaryErrorMessage);
   }
-}
-
-async function buildExtractionCandidate(
-  input: {
-    cleaned: Pick<CleaningOutputDto, 'clean_text'>;
-    messageId: string;
-    contentHash?: string;
-  },
-  llmConfig: {
-    apiKey: string;
-    model: string;
-    timeoutMs: number;
-    retries: number;
-  }
-): Promise<{
-  status: 'parsed' | 'rejected' | 'error';
-  rawModelOutput: string;
-  parsedJson: string | null;
-  rejectionReason: string | null;
-  modelName: string;
-  promptVersion: string;
-  tags: string[];
-}> {
-  const modelName = llmConfig.model;
-  const promptVersion = 'v2-tag-explanation-canonical';
-  let rawModelOutput = '';
-
-  try {
-    rawModelOutput = await requestLlmRawText(llmConfig, {
-      resumeText: input.cleaned.clean_text,
-      messageId: input.messageId,
-      contentHash: input.contentHash
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return {
-      status: 'error',
-      rawModelOutput: JSON.stringify({ error: reason }),
-      parsedJson: null,
-      rejectionReason: reason,
-      modelName,
-      promptVersion,
-      tags: []
-    };
-  }
-
-  try {
-    const parsed = parseTagExplanations(rawModelOutput);
-    if (parsed.status === 'rejected') {
-      return {
-        status: 'rejected',
-        rawModelOutput,
-        parsedJson: null,
-        rejectionReason: parsed.rejection_reason,
-        modelName,
-        promptVersion,
-        tags: []
-      };
-    }
-
-    const tags = sortExtractionTags(parsed.tag_explanations.map((entry) => entry.tag));
-    const explanations = Object.fromEntries(parsed.tag_explanations.map((entry) => [entry.tag, entry.explanation]));
-    const validated = parseExtractionResult({
-      tags,
-      explanations,
-      location: null
-    });
-
-    return {
-      status: 'parsed',
-      rawModelOutput,
-      parsedJson: JSON.stringify(validated),
-      rejectionReason: null,
-      modelName,
-      promptVersion,
-      tags: validated.tags
-    };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return {
-      status: 'error',
-      rawModelOutput,
-      parsedJson: null,
-      rejectionReason: reason,
-      modelName,
-      promptVersion,
-      tags: []
-    };
-  }
-}
-
-function matchCandidate(
-  msg: { messageId: string; from?: string },
-  tags: string[]
-): { candidateIdentifier: string; matchOutcome: 'matched' | 'no_match' | 'ambiguous'; matchedCandidateId: string | null } {
-  const candidateIdentifier = (msg.from ?? '').trim() || `message:${msg.messageId}`;
-  const hasAmbiguitySignal = tags.includes('signal:weak');
-
-  if (hasAmbiguitySignal) {
-    return {
-      candidateIdentifier,
-      matchOutcome: 'ambiguous',
-      matchedCandidateId: null
-    };
-  }
-
-  return {
-    candidateIdentifier,
-    matchOutcome: 'no_match',
-    matchedCandidateId: null
-  };
-}
-
-function syncToVincere(
-  msg: { messageId: string },
-  tags: string[],
-  matching: { matchOutcome: 'matched' | 'no_match' | 'ambiguous' }
-): { status: 'success' | 'error' | 'skipped'; tagsApplied: string[]; errorText: string | null } {
-  if (matching.matchOutcome === 'ambiguous') {
-    return {
-      status: 'error',
-      tagsApplied: [],
-      errorText: `Ambiguous candidate match for message ${msg.messageId}`
-    };
-  }
-
-  return {
-    status: matching.matchOutcome === 'matched' ? 'success' : 'skipped',
-    tagsApplied: matching.matchOutcome === 'matched' ? tags : [],
-    errorText: null
-  };
 }
 
 export function getSummaryErrorMessage(summary: Pick<RunSummary, 'errors'>): string | undefined {
