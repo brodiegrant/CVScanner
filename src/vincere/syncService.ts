@@ -1,4 +1,5 @@
 import { createLogger, redact } from '../observability/logger.js';
+import { mapTagsToExpertiseLinks } from './expertiseMapping.js';
 import { VincereClient } from './client.js';
 import { CandidateIdentity, CandidateMatchInput, matchCandidates } from './matching.js';
 import type { VincereSyncAttemptRow } from '../storage/sqlite/sqlitePipelineStore.js';
@@ -249,6 +250,19 @@ async function applyPostSyncCandidateActions(opts: {
     }
   } else {
     opts.attemptState.expertiseLinkResult = 'skipped_no_expertise_ids';
+  }
+
+  if (mappedExpertise.items.length > 0) {
+    opts.logger.info('vincere.write.update_expertise_links', {
+      sourceId: opts.sourceId,
+      candidateId: opts.candidateId,
+      dryRun: Boolean(opts.dryRun),
+      expertiseLinkCount: mappedExpertise.items.length
+    });
+
+    if (!opts.dryRun) {
+      await opts.vincereClient.updateExpertiseLinks(opts.candidateId, mappedExpertise.items);
+    }
   }
 
   const selectedCv = selectCvAttachment(opts.attachments ?? []);

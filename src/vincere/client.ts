@@ -1,3 +1,4 @@
+import type { ExpertiseLinkPayloadItem } from './expertiseMapping.js';
 export type VincereClientConfig = {
   apiBaseUrl: string;
   apiKey: string;
