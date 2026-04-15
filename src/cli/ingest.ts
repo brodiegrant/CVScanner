@@ -12,7 +12,9 @@ import type { RunSummary } from '../gmail/ingest/ingestService.js';
 import { runCleaningPipeline } from '../pipeline/cleaning/pipeline.js';
 import type { CleaningOutputDto } from '../pipeline/cleaning/types.js';
 import { sortExtractionTags } from '../pipeline/extractionResult.js';
-import { evaluateReviewPolicy } from '../pipeline/reviewPolicy.js';
+import { parseTagExplanations, ExtractionParseError } from '../pipeline/extraction/parseTagExplanations.js';
+import { evaluateReviewPolicy, ManualReviewReasonCode, type ManualReviewReasonCode as PolicyReviewReasonCode } from '../pipeline/reviewPolicy.js';
+import type { ManualReviewQueueRow } from '../storage/sqlite/sqlitePipelineStore.js';
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
@@ -47,35 +49,17 @@ async function main() {
         provenance: msg.provenance,
         message_id: msg.messageId
       });
-
-      throwOnCleaningErrors(cleaned, msg.messageId);
-
-      const extraction = buildExtractionCandidate(cleaned);
-      const rawModelOutput = extraction.rawModelOutput;
-
-      pipelineStore.upsertCandidateExtraction({
-        accountEmail: account,
-        messageId: msg.messageId,
-        contentHash: msg.contentHash ?? null,
-        status: extraction.status,
-        rawModelOutput: extraction.rawModelOutput,
-        parsedJson: extraction.parsedJson,
-        rejectionReason: extraction.rejectionReason,
-        modelName: extraction.modelName,
-        promptVersion: extraction.promptVersion
-      });
-
+      let extraction: ReturnType<typeof buildExtractionCandidate>;
       try {
         throwOnCleaningErrors(cleaned, msg.messageId);
         extraction = buildExtractionCandidate(cleaned);
-        const rawModelOutput = JSON.stringify(extraction.rawModelOutput);
 
         pipelineStore.upsertCandidateExtraction({
           accountEmail: account,
           messageId: msg.messageId,
           contentHash: msg.contentHash ?? null,
           status: extraction.status,
-          rawModelOutput,
+          rawModelOutput: extraction.rawModelOutput,
           parsedJson: extraction.parsedJson,
           rejectionReason: extraction.rejectionReason,
           modelName: extraction.modelName,
@@ -98,7 +82,12 @@ async function main() {
           reason: 'extraction_error',
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ cleaned, error: errorText })
+          payloadSnapshot: JSON.stringify({
+            stage: 'extraction',
+            quarantined: true,
+            cleaned,
+            error: errorText
+          })
         });
         return;
       }
@@ -139,7 +128,12 @@ async function main() {
           reason: 'sync_error',
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, error: errorText })
+          payloadSnapshot: JSON.stringify({
+            stage: 'sync_or_upload',
+            quarantined: true,
+            extraction,
+            error: errorText
+          })
         });
         return;
       }
@@ -152,7 +146,7 @@ async function main() {
 
       if (reviewDecision.manualReviewQueueRecord !== null) {
         pipelineStore.upsertManualReviewQueue({
-          reason: reviewDecision.manualReviewQueueRecord.reasonCode,
+          reason: mapPolicyReasonToQueueReason(reviewDecision.manualReviewQueueRecord.reasonCode),
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
           payloadSnapshot: JSON.stringify({ extraction, matching, syncResult, reviewDecision })
@@ -161,10 +155,16 @@ async function main() {
 
       if (syncResult.status === 'error') {
         pipelineStore.upsertManualReviewQueue({
-          reason: 'SYNC_ERROR',
+          reason: 'sync_error',
           messageId: msg.messageId,
           candidateHints: JSON.stringify({ from: msg.from, subject: msg.subject }),
-          payloadSnapshot: JSON.stringify({ extraction, matching, syncResult })
+          payloadSnapshot: JSON.stringify({
+            stage: 'sync_or_upload',
+            quarantined: true,
+            extraction,
+            matching,
+            syncResult
+          })
         });
       }
 
@@ -177,6 +177,20 @@ async function main() {
   const summaryErrorMessage = getSummaryErrorMessage(summary);
   if (summaryErrorMessage) {
     throw new Error(summaryErrorMessage);
+  }
+}
+
+function mapPolicyReasonToQueueReason(reasonCode: PolicyReviewReasonCode): ManualReviewQueueRow['reason'] {
+  switch (reasonCode) {
+    case ManualReviewReasonCode.AmbiguousCandidateMatch:
+      return 'ambiguous_match';
+    case ManualReviewReasonCode.LowNonLocationTagCount:
+    case ManualReviewReasonCode.RejectedOutput:
+      return 'low_tag_count';
+    default: {
+      const exhaustiveCheck: never = reasonCode;
+      throw new Error(`Unhandled review policy reason: ${String(exhaustiveCheck)}`);
+    }
   }
 }
 
