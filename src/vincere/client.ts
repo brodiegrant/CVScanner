@@ -114,6 +114,16 @@ export class VincereClient {
     });
   }
 
+  async updateSubFunctionalExpertiseLinks(candidateId: string, expertiseIds: string[]): Promise<void> {
+    const deduped = [...new Set(expertiseIds.map((id) => id.trim()).filter(Boolean))];
+    if (deduped.length === 0) return;
+
+    await this.patch<void>(`/api/candidate/${encodeURIComponent(candidateId)}/sub-functional-expertise`, {
+      candidateId,
+      subFunctionalExpertiseIds: deduped
+    });
+  }
+
   async uploadCandidateDocument(candidateId: string, input: CandidateDocumentUpload): Promise<void> {
     const form = new FormData();
     const mimeType = input.mimeType?.trim() || 'application/octet-stream';
