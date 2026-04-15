@@ -69,9 +69,9 @@ export async function ingestOnce(opts: {
   gmailClient: GmailClient;
   cursorStore: CursorStore;
   metrics: Metrics;
-  // onMessage MUST throw/reject when downstream processing fails.
-  // ingestOnce treats that as a hard failure, does not mark the message
-  // processed, and does not advance cursor/progress for that message.
+  // onMessage should quarantine message-level extraction/sync/upload errors
+  // internally and return. Throw/reject is reserved for fatal non-message
+  // failures; ingestOnce treats thrown errors as hard failures.
   onMessage: (m: IngestForLlm) => Promise<void>;
 }): Promise<RunSummary> {
   const logger = createLogger(opts.config.logLevel);
