@@ -4,7 +4,10 @@ import { loadConfig } from '../src/config/config.js';
 const REQUIRED_ENV = {
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
-  TOKEN_ENC_KEY: 'enc-key'
+  TOKEN_ENC_KEY: 'enc-key',
+  OPENAI_API_KEY: 'openai-key',
+  VINCERE_API_KEY: 'vincere-key',
+  VINCERE_ID_TOKEN: 'vincere-id-token'
 };
 
 function withEnv(overrides: Record<string, string | undefined>) {
@@ -56,5 +59,24 @@ describe('environment boolean parsing', () => {
     withEnv({ METRICS_ENABLED: 'maybe' });
 
     expect(() => loadConfig()).toThrow(/Expected a boolean value/);
+  });
+
+  it('throws clear strategy-specific errors for oauth refresh token strategy', () => {
+    withEnv({
+      METRICS_ENABLED: 'true',
+      VINCERE_TOKEN_STRATEGY: 'oauth_refresh_token',
+      VINCERE_ID_TOKEN: undefined,
+      VINCERE_OAUTH_CLIENT_ID: undefined,
+      VINCERE_OAUTH_CLIENT_SECRET: undefined,
+      VINCERE_OAUTH_REDIRECT_URI: undefined,
+      VINCERE_OAUTH_REFRESH_TOKEN: undefined
+    });
+    delete process.env.VINCERE_ID_TOKEN;
+    delete process.env.VINCERE_OAUTH_CLIENT_ID;
+    delete process.env.VINCERE_OAUTH_CLIENT_SECRET;
+    delete process.env.VINCERE_OAUTH_REDIRECT_URI;
+    delete process.env.VINCERE_OAUTH_REFRESH_TOKEN;
+
+    expect(() => loadConfig()).toThrow(/VINCERE_OAUTH_CLIENT_ID is required when VINCERE_TOKEN_STRATEGY=oauth_refresh_token/);
   });
 });

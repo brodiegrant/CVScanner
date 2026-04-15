@@ -1,29 +1,42 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
-import { z } from 'zod';
+import { ZodError, z } from 'zod';
 
 dotenv.config();
 
 const envBoolean = (defaultValue: boolean) =>
-  z.union([
-    z.boolean(),
-    z
-      .string()
-      .trim()
-      .toLowerCase()
-      .refine((value) => ['true', 'false', '1', '0', 'yes', 'no'].includes(value), {
+  z.union([z.boolean(), z.string()])
+    .transform((value, ctx) => {
+      if (typeof value === 'boolean') return value;
+
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes'].includes(normalized)) return true;
+      if (['false', '0', 'no'].includes(normalized)) return false;
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
         message: 'Expected a boolean value (true/false/1/0/yes/no)'
-      })
-      .transform((value) => ['true', '1', 'yes'].includes(value))
-  ]).default(defaultValue);
+      });
+      return z.NEVER;
+    })
+    .default(defaultValue);
+
+const nonEmptyString = (name: string) =>
+  z.string().trim().min(1, `${name} is required`);
+
+const absoluteUrl = (name: string) =>
+  z
+    .string()
+    .trim()
+    .url(`${name} must be a valid absolute URL`);
 
 const schema = z.object({
-  GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1),
+  GOOGLE_OAUTH_CLIENT_ID: nonEmptyString('GOOGLE_OAUTH_CLIENT_ID'),
+  GOOGLE_OAUTH_CLIENT_SECRET: nonEmptyString('GOOGLE_OAUTH_CLIENT_SECRET'),
   GOOGLE_OAUTH_REDIRECT_HOST: z.string().default('127.0.0.1'),
   GOOGLE_OAUTH_REDIRECT_PORT: z.coerce.number().int().positive().default(53682),
-  TOKEN_ENC_KEY: z.string().min(1),
+  TOKEN_ENC_KEY: nonEmptyString('TOKEN_ENC_KEY'),
   SQLITE_PATH: z.string().default('./data/cvscanner.db'),
   METRICS_JSONL_PATH: z.string().default('./data/metrics.jsonl'),
   GMAIL_LABEL: z.string().default('Process'),
@@ -40,11 +53,51 @@ const schema = z.object({
   INTERNAL_REVIEW_API_ENABLED: envBoolean(false),
   INTERNAL_REVIEW_API_HOST: z.string().default('127.0.0.1'),
   INTERNAL_REVIEW_API_PORT: z.coerce.number().int().positive().default(53901),
-  OPENAI_API_KEY: z.string().min(1),
-  LLM_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  OPENAI_API_KEY: nonEmptyString('OPENAI_API_KEY'),
+  LLM_MODEL: nonEmptyString('LLM_MODEL').default('gpt-4o-mini'),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
-  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(3).default(2)
+  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(3).default(2),
+  VINCERE_API_BASE_URL: absoluteUrl('VINCERE_API_BASE_URL').default('https://api.vincere.io'),
+  VINCERE_API_KEY: nonEmptyString('VINCERE_API_KEY'),
+  VINCERE_TOKEN_STRATEGY: z.enum(['static_id_token', 'oauth_refresh_token']).default('static_id_token'),
+  VINCERE_ID_TOKEN: z.string().trim().optional(),
+  VINCERE_OAUTH_CLIENT_ID: z.string().trim().optional(),
+  VINCERE_OAUTH_CLIENT_SECRET: z.string().trim().optional(),
+  VINCERE_OAUTH_REDIRECT_URI: z.string().trim().optional(),
+  VINCERE_OAUTH_SCOPE: z.string().trim().default('openid profile offline_access'),
+  VINCERE_OAUTH_AUDIENCE: z.string().trim().optional(),
+  VINCERE_OAUTH_REFRESH_TOKEN: z.string().trim().optional()
+}).superRefine((value, ctx) => {
+  if (value.VINCERE_TOKEN_STRATEGY === 'static_id_token') {
+    if (!value.VINCERE_ID_TOKEN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['VINCERE_ID_TOKEN'],
+        message: 'VINCERE_ID_TOKEN is required when VINCERE_TOKEN_STRATEGY=static_id_token'
+      });
+    }
+    return;
+  }
+
+  const requiredOauthFields = [
+    'VINCERE_OAUTH_CLIENT_ID',
+    'VINCERE_OAUTH_CLIENT_SECRET',
+    'VINCERE_OAUTH_REDIRECT_URI',
+    'VINCERE_OAUTH_REFRESH_TOKEN'
+  ] as const;
+
+  for (const field of requiredOauthFields) {
+    if (!value[field]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} is required when VINCERE_TOKEN_STRATEGY=oauth_refresh_token`
+      });
+    }
+  }
 });
+
+type ParsedConfig = z.infer<typeof schema>;
 
 export type AppConfig = {
   oauth: { clientId: string; clientSecret: string; redirectHost: string; redirectPort: number };
@@ -73,7 +126,37 @@ export type AppConfig = {
     timeoutMs: number;
     maxRetries: number;
   };
+  vincere: {
+    apiBaseUrl: string;
+    apiKey: string;
+    tokenStrategy: 'static_id_token' | 'oauth_refresh_token';
+    idToken?: string;
+    oauth: {
+      clientId?: string;
+      clientSecret?: string;
+      redirectUri?: string;
+      scope: string;
+      audience?: string;
+      refreshToken?: string;
+    };
+  };
 };
+
+function parseEnvironment(input: Record<string, unknown>): ParsedConfig {
+  const parsed = schema.safeParse(input);
+  if (parsed.success) return parsed.data;
+
+  throw new Error(formatConfigError(parsed.error));
+}
+
+function formatConfigError(error: ZodError): string {
+  const lines = error.issues.map((issue) => {
+    const field = issue.path[0] ?? 'UNKNOWN_ENV';
+    return `- ${String(field)}: ${issue.message}`;
+  });
+
+  return `Invalid environment configuration:\n${lines.join('\n')}`;
+}
 
 export function loadConfig(): AppConfig {
   const jsonPath = process.env.CONFIG_JSON_PATH;
@@ -81,7 +164,7 @@ export function loadConfig(): AppConfig {
     ? JSON.parse(fs.readFileSync(path.resolve(jsonPath), 'utf8'))
     : {};
 
-  const parsed = schema.parse({ ...fromJson, ...process.env });
+  const parsed = parseEnvironment({ ...fromJson, ...process.env });
   return {
     oauth: {
       clientId: parsed.GOOGLE_OAUTH_CLIENT_ID,
@@ -113,6 +196,20 @@ export function loadConfig(): AppConfig {
       model: parsed.LLM_MODEL,
       timeoutMs: parsed.LLM_TIMEOUT_MS,
       maxRetries: parsed.LLM_MAX_RETRIES
+    },
+    vincere: {
+      apiBaseUrl: parsed.VINCERE_API_BASE_URL,
+      apiKey: parsed.VINCERE_API_KEY,
+      tokenStrategy: parsed.VINCERE_TOKEN_STRATEGY,
+      idToken: parsed.VINCERE_ID_TOKEN,
+      oauth: {
+        clientId: parsed.VINCERE_OAUTH_CLIENT_ID,
+        clientSecret: parsed.VINCERE_OAUTH_CLIENT_SECRET,
+        redirectUri: parsed.VINCERE_OAUTH_REDIRECT_URI,
+        scope: parsed.VINCERE_OAUTH_SCOPE,
+        audience: parsed.VINCERE_OAUTH_AUDIENCE,
+        refreshToken: parsed.VINCERE_OAUTH_REFRESH_TOKEN
+      }
     }
   };
 }

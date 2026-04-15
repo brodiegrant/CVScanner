@@ -37,7 +37,87 @@ Set `.env` values:
 - `TOKEN_ENC_KEY=<base64_32_byte_key>`
 - `SQLITE_PATH=./data/cvscanner.db`
 - `METRICS_JSONL_PATH=./data/metrics.jsonl`
+- `OPENAI_API_KEY=<openai_api_key>`
+- `LLM_MODEL=gpt-4o-mini` (or another supported model)
+- `VINCERE_API_BASE_URL=https://api.vincere.io`
+- `VINCERE_API_KEY=<vincere_api_key>`
 - optional `GMAIL_LABEL=Process` (label name or ID; names are resolved to IDs at runtime)
+
+### Vincere authentication strategy
+Set `VINCERE_TOKEN_STRATEGY` to one of:
+
+1. `static_id_token` (default): provide a pre-issued `VINCERE_ID_TOKEN`.
+2. `oauth_refresh_token`: provide OAuth client credentials + refresh token and let the app refresh tokens.
+
+Required variables by strategy:
+
+- `static_id_token`
+  - `VINCERE_ID_TOKEN`
+- `oauth_refresh_token`
+  - `VINCERE_OAUTH_CLIENT_ID`
+  - `VINCERE_OAUTH_CLIENT_SECRET`
+  - `VINCERE_OAUTH_REDIRECT_URI`
+  - `VINCERE_OAUTH_REFRESH_TOKEN`
+  - optional `VINCERE_OAUTH_SCOPE` (defaults to `openid profile offline_access`)
+  - optional `VINCERE_OAUTH_AUDIENCE`
+
+At startup, configuration is validated and the app exits with explicit errors if required env vars are missing/invalid.
+
+## Environment examples
+### Local development example (`.env`)
+```dotenv
+GOOGLE_OAUTH_CLIENT_ID=local-google-client-id
+GOOGLE_OAUTH_CLIENT_SECRET=local-google-secret
+GOOGLE_OAUTH_REDIRECT_HOST=127.0.0.1
+GOOGLE_OAUTH_REDIRECT_PORT=53682
+TOKEN_ENC_KEY=REPLACE_WITH_BASE64_32_BYTE_KEY
+SQLITE_PATH=./data/cvscanner.db
+METRICS_JSONL_PATH=./data/metrics.jsonl
+GMAIL_LABEL=Process
+OPENAI_API_KEY=sk-local
+LLM_MODEL=gpt-4o-mini
+LLM_TIMEOUT_MS=30000
+LLM_MAX_RETRIES=2
+VINCERE_API_BASE_URL=https://api.vincere.io
+VINCERE_API_KEY=local-vincere-api-key
+VINCERE_TOKEN_STRATEGY=static_id_token
+VINCERE_ID_TOKEN=local-vincere-id-token
+```
+
+### Shared dev/staging example (OAuth refresh strategy)
+```dotenv
+GOOGLE_OAUTH_CLIENT_ID=dev-google-client-id
+GOOGLE_OAUTH_CLIENT_SECRET=dev-google-secret
+GOOGLE_OAUTH_REDIRECT_HOST=127.0.0.1
+GOOGLE_OAUTH_REDIRECT_PORT=53682
+TOKEN_ENC_KEY=REPLACE_WITH_BASE64_32_BYTE_KEY
+OPENAI_API_KEY=sk-dev
+LLM_MODEL=gpt-4o-mini
+VINCERE_API_BASE_URL=https://api.vincere.io
+VINCERE_API_KEY=dev-vincere-api-key
+VINCERE_TOKEN_STRATEGY=oauth_refresh_token
+VINCERE_OAUTH_CLIENT_ID=dev-vincere-client-id
+VINCERE_OAUTH_CLIENT_SECRET=dev-vincere-client-secret
+VINCERE_OAUTH_REDIRECT_URI=https://dev.example.com/oauth/vincere/callback
+VINCERE_OAUTH_SCOPE=openid profile offline_access
+VINCERE_OAUTH_REFRESH_TOKEN=dev-refresh-token
+```
+
+### Production example (shell env / secret manager mapping)
+```bash
+export GOOGLE_OAUTH_CLIENT_ID=prod-google-client-id
+export GOOGLE_OAUTH_CLIENT_SECRET=prod-google-secret
+export TOKEN_ENC_KEY=REPLACE_WITH_BASE64_32_BYTE_KEY
+export OPENAI_API_KEY=sk-prod
+export LLM_MODEL=gpt-4o-mini
+export VINCERE_API_BASE_URL=https://api.vincere.io
+export VINCERE_API_KEY=prod-vincere-api-key
+export VINCERE_TOKEN_STRATEGY=oauth_refresh_token
+export VINCERE_OAUTH_CLIENT_ID=prod-vincere-client-id
+export VINCERE_OAUTH_CLIENT_SECRET=prod-vincere-client-secret
+export VINCERE_OAUTH_REDIRECT_URI=https://cvscanner.example.com/oauth/vincere/callback
+export VINCERE_OAUTH_REFRESH_TOKEN=prod-refresh-token
+```
 
 ## Commands
 Connect account (one-time consent):
@@ -62,6 +142,12 @@ Run summary counters:
 Run internal review API (disabled by default):
 ```bash
 npm run review-api
+```
+
+Build and tests:
+```bash
+npm run build
+npm test
 ```
 
 
