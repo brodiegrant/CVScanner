@@ -4,15 +4,15 @@ import { ExtractionParseError, parseTagExplanations } from './parseTagExplanatio
 describe('parseTagExplanations', () => {
   it('parses accepted tag + explanation pairs', () => {
     const result = parseTagExplanations(
-      `tier:t2\nCandidate appears viable\nscope:remote\nRole can be done remotely\ntech:backend\nRequires backend experience`
+      `tier:2\nCandidate appears viable\nscope:core\nCore-level hardware scope\ntech:python\nEvidence of Python verification tooling`
     );
 
     expect(result).toEqual({
       status: 'accepted',
       tag_explanations: [
-        { tag: 'tier:t2', explanation: 'Candidate appears viable' },
-        { tag: 'scope:remote', explanation: 'Role can be done remotely' },
-        { tag: 'tech:backend', explanation: 'Requires backend experience' }
+        { tag: 'tier:2', explanation: 'Candidate appears viable' },
+        { tag: 'scope:core', explanation: 'Core-level hardware scope' },
+        { tag: 'tech:python', explanation: 'Evidence of Python verification tooling' }
       ]
     });
   });
@@ -28,7 +28,7 @@ describe('parseTagExplanations', () => {
   });
 
   it('rejects uneven line counts in accepted mode', () => {
-    expect(() => parseTagExplanations('scope:remote\nOnly one pair\ntech:backend')).toThrowError(
+    expect(() => parseTagExplanations('scope:core\nOnly one pair\ntech:python')).toThrowError(
       new ExtractionParseError(
         'UNEVEN_LINE_COUNT',
         'Accepted mode requires an even number of non-empty lines (tag + explanation pairs)'
@@ -48,14 +48,26 @@ describe('parseTagExplanations', () => {
   });
 
   it('rejects non-singleton prefixes that violate cardinality rules', () => {
-    expect(() => parseTagExplanations('visa:required\nRequires visa\nvisa:sponsored\nOffers sponsorship')).toThrowError(
+    expect(() => parseTagExplanations('visa:issue\nRequires visa\nvisa:no_issues\nNo immigration issue')).toThrowError(
       /INVALID_CARDINALITY|Invalid tag set/
     );
   });
 
   it('reject mode must only contain two non-empty lines', () => {
-    expect(() => parseTagExplanations('reject\nNot enough detail\ntech:backend\nextra')).toThrowError(
+    expect(() => parseTagExplanations('reject\nNot enough detail\ntech:python\nextra')).toThrowError(
       /Reject mode only allows 2 non-empty lines/
+    );
+  });
+
+  it('marks blank lines as contract deviation', () => {
+    expect(() => parseTagExplanations('tier:2\nValid tier\n\nscope:core\nValid scope')).toThrowError(
+      /CONTRACT_DEVIATION|blank lines/
+    );
+  });
+
+  it('requires exact lowercase reject keyword', () => {
+    expect(() => parseTagExplanations('Reject\nNot enough detail')).toThrowError(
+      /CONTRACT_DEVIATION|must be exactly "reject"/
     );
   });
 });
