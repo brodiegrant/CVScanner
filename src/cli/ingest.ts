@@ -129,7 +129,7 @@ async function main() {
           messageId: msg.messageId,
           contentHash: msg.contentHash ?? null,
           status: extraction.status,
-          rawModelOutput,
+          rawModelOutput: extraction.rawModelOutput,
           parsedJson: extraction.parsedJson,
           rejectionReason: extraction.rejectionReason,
           modelName: extraction.modelName,
